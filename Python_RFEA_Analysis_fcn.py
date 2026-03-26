@@ -280,7 +280,7 @@ def iedf(
 
     # Ion flux calculation
     valid = (E > 0) & (dIdE > 0)
-    S = np.trapz(dIdE[valid], E[valid]) if np.any(valid) else 0.0
+    S = np.trapezoid(dIdE[valid], E[valid]) if np.any(valid) else 0.0
 
     corr_fac = ion_flux_pressure_correction(pressure)
     flux = S * corr_fac

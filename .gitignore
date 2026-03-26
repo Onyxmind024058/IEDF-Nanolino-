@@ -1,0 +1,10 @@
+/build/
+/dist/
+/installer/
+/RFEAtestCable_1.csv
+/RFEAtestCable_12.csv
+/RFEAtestCable_2.csv
+/RFEA_Analyzer.spec
+/IEDFbyPH.spec
+/.idea/
+/.venv/
