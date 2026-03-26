@@ -1,13 +1,17 @@
 import sys
 import os
+import webbrowser
+import json
 from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QDoubleSpinBox, QSpinBox, QComboBox,
     QLabel, QGroupBox, QMessageBox, QSplitter
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 
 import numpy as np
@@ -18,9 +22,100 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 from Python_RFEA_Analysis_fcn import full_analysis
 
 
+# ============================================================
+# App / GitHub release settings
+# ============================================================
+APP_VERSION = "1.0.3"
+GITHUB_OWNER = "Onyxmind024058"
+GITHUB_REPO = "IEDFbyPH"
+
+# Optional:
+# If you only want to auto-open a specific asset type when an update exists,
+# list extensions in order of preference.
+PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
+
+
 def resource_path(rel_path: str) -> str:
     base = getattr(sys, "_MEIPASS", os.path.abspath("."))
     return os.path.join(base, rel_path)
+
+
+def normalize_version(v: str) -> str:
+    return (v or "").strip().lstrip("v").strip()
+
+
+def parse_version_tuple(v: str) -> tuple[int, ...]:
+    """
+    Simple numeric version parser:
+    '1.2.3' -> (1, 2, 3)
+    'v1.2.3' -> (1, 2, 3)
+    '1.2' -> (1, 2)
+
+    Non-numeric suffixes are ignored in each dot-separated chunk:
+    '1.2.3-beta1' -> (1, 2, 3)
+    """
+    v = normalize_version(v)
+    if not v:
+        return (0,)
+
+    parts = []
+    for chunk in v.split("."):
+        digits = ""
+        for ch in chunk:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if digits == "":
+            parts.append(0)
+        else:
+            parts.append(int(digits))
+    return tuple(parts) if parts else (0,)
+
+
+def is_newer_version(latest_tag: str, current_version: str) -> bool:
+    return parse_version_tuple(latest_tag) > parse_version_tuple(current_version)
+
+
+def get_latest_github_release(owner: str, repo: str) -> dict:
+    """
+    Fetch latest GitHub release metadata.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": f"{repo}-update-checker",
+    }
+    req = Request(url, headers=headers, method="GET")
+    with urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def choose_best_asset(release: dict) -> str | None:
+    """
+    Pick the first release asset matching preferred extensions.
+    Falls back to None if nothing matches.
+    """
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        return None
+
+    # Try preferred extensions first
+    for ext in PREFERRED_ASSET_EXTENSIONS:
+        for asset in assets:
+            name = str(asset.get("name", "")).lower()
+            url = asset.get("browser_download_url")
+            if name.endswith(ext) and url:
+                return url
+
+    # Fallback: first asset with browser_download_url
+    for asset in assets:
+        url = asset.get("browser_download_url")
+        if url:
+            return url
+
+    return None
 
 
 def main():
@@ -128,7 +223,6 @@ class MainWindow(QMainWindow):
         pb.addWidget(QLabel("SG window_length (odd)"))
         pb.addWidget(self.sg_win)
 
-        # Sheath / tau_ratio parameters
         pb.addWidget(QLabel("Vp (V)"))
         self.vp = QDoubleSpinBox()
         self.vp.setRange(0.0, 1e4)
@@ -179,6 +273,9 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.btn_export_csv)
         controls.addWidget(self.btn_export_plot)
 
+        self.btn_check_updates = QPushButton("Check for updates")
+        controls.addWidget(self.btn_check_updates)
+
         self.btn_about = QPushButton("About")
         controls.addWidget(self.btn_about)
 
@@ -195,7 +292,6 @@ class MainWindow(QMainWindow):
         plot_layout.addWidget(self.toolbar)
         plot_layout.addWidget(self.canvas)
 
-        # Hover text
         self._hover_text = self.canvas.ax1.text(
             0.02, 0.98, "",
             transform=self.canvas.ax1.transAxes,
@@ -215,6 +311,7 @@ class MainWindow(QMainWindow):
         self.btn_run.clicked.connect(self.run)
         self.btn_export_csv.clicked.connect(self.export_csv)
         self.btn_export_plot.clicked.connect(self.export_plot)
+        self.btn_check_updates.clicked.connect(lambda: self.check_for_updates(silent=False))
         self.btn_about.clicked.connect(self.show_about)
         self.btn_toggle_panel.clicked.connect(self.toggle_left_panel)
         self.smooth_method.currentIndexChanged.connect(self.sync_param_visibility)
@@ -240,6 +337,9 @@ class MainWindow(QMainWindow):
                 w.currentIndexChanged.connect(self.run)
 
         self.sync_param_visibility()
+
+        # Silent update check shortly after startup
+        QTimer.singleShot(1200, lambda: self.check_for_updates(silent=True))
 
     def sync_param_visibility(self):
         method = self.smooth_method.currentText()
@@ -272,7 +372,7 @@ class MainWindow(QMainWindow):
         name = "RFEA analysis by P. Hiret"
         company = "Universität Basel"
         email = "paul.hiret@unibas.ch"
-        version = "1.0.0"
+        version = APP_VERSION
 
         text = (
             f"<b>{name}</b> <span style='color:gray'>(v{version})</span><br>"
@@ -286,6 +386,100 @@ class MainWindow(QMainWindow):
         box.setText(text)
         box.setStandardButtons(QMessageBox.Ok)
         box.exec()
+
+    def check_for_updates(self, silent: bool = False):
+        if not GITHUB_OWNER or not GITHUB_REPO or GITHUB_OWNER == "your-github-name" or GITHUB_REPO == "your-repo-name":
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    "Updates not configured",
+                    "Please set GITHUB_OWNER and GITHUB_REPO in the code first."
+                )
+            return
+
+        try:
+            release = get_latest_github_release(GITHUB_OWNER, GITHUB_REPO)
+        except HTTPError as e:
+            if not silent:
+                QMessageBox.warning(
+                    self,
+                    "Update check failed",
+                    f"GitHub returned an error:\nHTTP {e.code} - {e.reason}"
+                )
+            return
+        except URLError as e:
+            if not silent:
+                QMessageBox.warning(
+                    self,
+                    "Update check failed",
+                    f"Could not reach GitHub:\n{e}"
+                )
+            return
+        except Exception as e:
+            if not silent:
+                QMessageBox.warning(
+                    self,
+                    "Update check failed",
+                    f"Unexpected error:\n{e}"
+                )
+            return
+
+        latest_tag = str(release.get("tag_name", "")).strip()
+        release_name = str(release.get("name", "")).strip()
+        release_page = str(release.get("html_url", "")).strip()
+        release_notes = str(release.get("body", "")).strip()
+
+        if not latest_tag:
+            if not silent:
+                QMessageBox.information(self, "Updates", "No valid release tag found on GitHub.")
+            return
+
+        if not is_newer_version(latest_tag, APP_VERSION):
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    "No update available",
+                    f"You already have the latest version ({APP_VERSION})."
+                )
+            return
+
+        latest_version = normalize_version(latest_tag)
+        asset_url = choose_best_asset(release)
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Update available")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText(
+            f"A newer version is available.\n\n"
+            f"Current version: {APP_VERSION}\n"
+            f"Latest version: {latest_version}"
+        )
+
+        if release_name:
+            msg.setInformativeText(release_name)
+
+        if release_notes:
+            notes = release_notes[:3000]
+            if len(release_notes) > 3000:
+                notes += "\n\n[Release notes truncated]"
+            msg.setDetailedText(notes)
+
+        btn_download = None
+        if asset_url:
+            btn_download = msg.addButton("Download update", QMessageBox.AcceptRole)
+
+        btn_release = None
+        if release_page:
+            btn_release = msg.addButton("Open release page", QMessageBox.ActionRole)
+
+        msg.addButton(QMessageBox.Cancel)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if btn_download is not None and clicked == btn_download:
+            webbrowser.open(asset_url)
+        elif btn_release is not None and clicked == btn_release:
+            webbrowser.open(release_page)
 
     def on_mouse_move(self, event):
         if event.inaxes not in (self.canvas.ax1, self.canvas.ax2):
@@ -401,7 +595,7 @@ class MainWindow(QMainWindow):
             smoothIVparam = int(self.Recursive_window.value())
         elif method == "Mavg":
             smoothIVparam = int(self.mavg_window.value())
-        else:  # SG
+        else:
             win = int(self.sg_win.value())
             if win % 2 == 0:
                 win += 1
@@ -454,37 +648,31 @@ class MainWindow(QMainWindow):
             f"Ion_flux (imported): {Ion_flux:.6g}"
         )
 
-        # ---- Plot update ----
         ax1, ax2 = self.canvas.ax1, self.canvas.ax2
         ax1.clear()
         ax2.clear()
 
-        # Recreate hover text after clear()
         self._hover_text = ax1.text(
             0.02, 0.98, "",
             transform=ax1.transAxes,
             va="top", ha="left"
         )
 
-        # Prepare data
         V = np.asarray(Vavg).ravel()
         I = np.asarray(Iavg).ravel()
         Is = np.asarray(Ismooth).ravel()
         E = np.asarray(E).ravel()
         dI = np.asarray(dIdE).ravel()
 
-        # Ensure consistent lengths
         n_iv = min(len(V), len(I), len(Is))
         V, I, Is = V[:n_iv], I[:n_iv], Is[:n_iv]
 
         n_e = min(len(E), len(dI))
         E, dI = E[:n_e], dI[:n_e]
 
-        # MATLAB-style trimming of IEDF
         if n_e > 10:
             E, dI = E[:-10], dI[:-10]
 
-        # Left axis: I-V
         ax1.plot(V, I, color="black", linewidth=2.5, label="I")
         ax1.plot(V, Is, color="green", linewidth=2.5, label="Ismooth")
         ax1.set_xlabel("Energy (eV)")
@@ -494,7 +682,6 @@ class MainWindow(QMainWindow):
         ax1.grid(True)
         ax1.legend(loc="upper left")
 
-        # Right axis: IEDF
         ax2.plot(E, dI, color="red", linewidth=2.5)
         ax2.set_ylabel("IEDF (a.u.)", color="red")
         ax2.yaxis.set_label_position("right")
