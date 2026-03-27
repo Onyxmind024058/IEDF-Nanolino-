@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import re
 
-# Optional deps (needed for SG + peak finding + plots)
 from scipy.signal import find_peaks, savgol_filter
 from scipy.ndimage import uniform_filter1d
 import matplotlib.pyplot as plt
 
 
-SmoothMethod = Literal["Recursive", "Mavg", "SG"]
+SmoothMethod = Literal["Recursive", "Mavg", "SG", "Manual"]
 
 
 def full_analysis(
@@ -22,30 +20,27 @@ def full_analysis(
     boolplot: bool,
     SmoothFactordIdV: int = 50,
     smoothfunctionIV: SmoothMethod = "Recursive",
-    smoothIVparam: Union[float, int, Sequence[int], None] = None,
+    smoothIVparam: Union[float, int, Sequence[int], dict, None] = None,
     *,
-    # The MATLAB code uses these but doesn't define them inside full_analysis.
-    # You can pass them here if you want tau_ratio computed.
-    Mi: Optional[float] = None,     # ion mass [u]
-    f_rf: Optional[float] = None,   # RF frequency [Hz]
-    Vp: Optional[float] = None,     # potential [V]
-    Te: float = 3.0,                # electron temperature [eV]
-    alpha: float = 3.0,             # scaling factor
-) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, float, np.ndarray, np.ndarray, float, Optional[float]]:
+    Mi: Optional[float] = None,
+    f_rf: Optional[float] = None,
+    Vp: Optional[float] = None,
+    Te: float = 3.0,
+    alpha: float = 3.0,
+) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, float, np.ndarray, np.ndarray, float, Optional[float], np.ndarray]:
     """
-    Python translation of the provided MATLAB code.
-
     Returns:
-      (Eavg, flux, dIdE, E, ni, Electrode_Voltage, Ion_flux, Ismooth, Iavg, Epeak, tau_ratio)
+      (Eavg, flux, dIdE, E, ni, Electrode_Voltage, Ion_flux, Ismooth, Iavg, Epeak, tau_ratio, Vavg)
     """
 
-    # Defaults matching MATLAB intent
     if smoothIVparam is None:
         smoothIVparam = np.nan
     if smoothfunctionIV == "Mavg" and _is_nan(smoothIVparam):
         smoothIVparam = 20
     if smoothfunctionIV == "SG" and _is_nan(smoothIVparam):
-        smoothIVparam = (1, 13)  # (polyorder, window_length) like example [1 13]
+        smoothIVparam = (1, 13)
+    if smoothfunctionIV == "Manual" and _is_nan(smoothIVparam):
+        smoothIVparam = {"ranges": []}
 
     SmoothFactorIV = 10
 
@@ -88,17 +83,7 @@ def full_analysis(
     )
 
 
-# -----------------------------
-# File import / trace separation
-# -----------------------------
-
 def import_file(filename: str) -> Tuple[float, float, pd.DataFrame]:
-    """
-    More robust import:
-      - Reads Electrode_Voltage from CSV line 3, column 2
-      - Reads Ion_flux from CSV line 6, column 2
-      - Reads traces from line 9 onward, tolerating 'trace ...' / headers / junk rows
-    """
     with open(filename, "r", encoding="utf-8", errors="replace") as f:
         lines = f.read().splitlines()
 
@@ -107,7 +92,6 @@ def import_file(filename: str) -> Tuple[float, float, pd.DataFrame]:
         if idx < 0 or idx >= len(lines):
             raise ValueError(f"File too short: can't read line {line_idx_1based}")
 
-        # split on comma OR semicolon
         parts = re.split(r"[;,]", lines[idx])
         parts = [p.strip() for p in parts if p.strip()]
 
@@ -119,12 +103,10 @@ def import_file(filename: str) -> Tuple[float, float, pd.DataFrame]:
     Electrode_Voltage = _read_second_col_as_float(3)
     Ion_flux = _read_second_col_as_float(6)
 
-    # Traces start at line 9 (1-based)
     trace_text = "\n".join(lines[8:])
 
     from io import StringIO
 
-    # 1) read without dtype enforcement
     df = pd.read_csv(
         StringIO(trace_text),
         header=None,
@@ -132,38 +114,30 @@ def import_file(filename: str) -> Tuple[float, float, pd.DataFrame]:
         usecols=[0, 1, 2],
         sep=None,
         engine="python",
-        dtype=str,              # <- read as strings first
+        dtype=str,
         skip_blank_lines=True,
     )
 
-    # 2) coerce to numeric (non-numeric -> NaN)
     for c in ["V", "I", "dIdE"]:
         df[c] = pd.to_numeric(df[c].str.strip(), errors="coerce")
 
-    # 3) keep rows that look like real numeric data OR NaN separators
-    #    - We want to retain NaNs in V because separate_traces_from_table uses them as separators.
-    #    - Drop rows that are totally non-numeric in all three columns.
     df = df.loc[~(df["V"].isna() & df["I"].isna() & df["dIdE"].isna())].reset_index(drop=True)
 
     return Electrode_Voltage, Ion_flux, df
-
 
 
 def separate_traces_from_table(traces_table: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     Vcol = traces_table["V"].to_numpy(dtype=float)
     Icol = traces_table["I"].to_numpy(dtype=float)
 
-    # Split into segments separated by NaN in V
     nan_idx = np.flatnonzero(np.isnan(Vcol))
-    # Add boundaries
-    boundaries = np.r_[ -1, nan_idx, Vcol.size ]
+    boundaries = np.r_[-1, nan_idx, Vcol.size]
     segments = []
     for a, b in zip(boundaries[:-1], boundaries[1:]):
         seg = slice(a + 1, b)
         if b - (a + 1) > 0:
             segments.append(seg)
 
-    # Keep only segments that have numeric V and I
     Vs, Is = [], []
     for seg in segments:
         v = Vcol[seg]
@@ -175,7 +149,6 @@ def separate_traces_from_table(traces_table: pd.DataFrame) -> Tuple[np.ndarray, 
     if not Vs:
         raise ValueError("No numeric trace segments found (check NaN separators / file format).")
 
-    # Ensure same length (MATLAB assumes equal lengths)
     nrow = min(len(v) for v in Vs)
     Vs = [v[:nrow] for v in Vs]
     Is = [i[:nrow] for i in Is]
@@ -183,11 +156,6 @@ def separate_traces_from_table(traces_table: pd.DataFrame) -> Tuple[np.ndarray, 
     I = np.column_stack(Is)
     return I, V
 
-
-
-# -----------------------------
-# Averaging / smoothing helpers
-# -----------------------------
 
 def traceaverage_and_smooth(
     I: np.ndarray,
@@ -202,15 +170,10 @@ def traceaverage_and_smooth(
 
 
 def smooth_1d(y: np.ndarray, window: int) -> np.ndarray:
-    """
-    MATLAB's smooth(...) is not one thing; a reasonable analogue is a moving average.
-    Uses odd window >= 1.
-    """
     y = np.asarray(y, dtype=float)
     if window is None:
         return y
     window = int(max(1, window))
-    # uniform_filter1d handles edges nicely
     return uniform_filter1d(y, size=window, mode="nearest")
 
 
@@ -221,9 +184,55 @@ def _is_nan(x) -> bool:
         return False
 
 
-# -----------------------------
-# IEDF + smoothing modes
-# -----------------------------
+def manual_smooth_by_ranges(
+    I: np.ndarray,
+    V: np.ndarray,
+    ranges_config: dict | None,
+) -> np.ndarray:
+    """
+    Apply piecewise moving-average smoothing on selected V-ranges only.
+    Outside the selected ranges, the original signal is kept unchanged.
+
+    ranges_config expected format:
+        {"ranges": [{"xmin": ..., "xmax": ..., "window": ...}, ...]}
+    """
+    I = np.asarray(I, dtype=float).ravel()
+    V = np.asarray(V, dtype=float).ravel()
+    Ismooth = I.copy()
+
+    if not isinstance(ranges_config, dict):
+        return Ismooth
+
+    ranges = ranges_config.get("ranges", [])
+    if not isinstance(ranges, list):
+        return Ismooth
+
+    for r in ranges:
+        try:
+            xmin = float(r["xmin"])
+            xmax = float(r["xmax"])
+            window = max(1, int(r["window"]))
+        except Exception:
+            continue
+
+        if xmax < xmin:
+            xmin, xmax = xmax, xmin
+
+        mask = (V >= xmin) & (V <= xmax)
+        idx = np.flatnonzero(mask)
+        if idx.size == 0:
+            continue
+
+        segment = I[idx]
+        if segment.size == 1:
+            Ismooth[idx] = segment
+        else:
+            local_win = min(window, segment.size)
+            local_win = max(1, local_win)
+            Ismooth[idx] = smooth_1d(segment, local_win)
+
+    return Ismooth
+
 
 def iedf(
     I: np.ndarray,
@@ -232,7 +241,7 @@ def iedf(
     *,
     SmoothFactordIdV: int = 50,
     smoothfunctionIV: SmoothMethod = "Recursive",
-    smoothIVparam: Union[float, int, Sequence[int]] = np.nan,
+    smoothIVparam: Union[float, int, Sequence[int], dict] = np.nan,
     Mi: float,
     Te: float,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, np.ndarray]:
@@ -261,7 +270,7 @@ def iedf(
         if _is_nan(smoothIVparam):
             polyorder, win = 1, 13
         else:
-            polyorder, win = smoothIVparam  # expecting (polyorder, window_length)
+            polyorder, win = smoothIVparam
 
         win = int(win)
         polyorder = int(polyorder)
@@ -275,17 +284,22 @@ def iedf(
         E = V[1:]
         Epeak = float(E[np.nanargmax(dIdE)]) if dIdE.size else np.nan
 
+    elif smoothfunctionIV == "Manual":
+        Ismooth = manual_smooth_by_ranges(I, V, smoothIVparam if isinstance(smoothIVparam, dict) else {"ranges": []})
+        dIdE = np.diff(np.r_[np.finfo(float).eps, Ismooth]) / np.diff(np.r_[np.finfo(float).eps, V])
+        dIdE = smooth_1d(dIdE[1:], SmoothFactordIdV)
+        E = V[1:]
+        Epeak = float(E[np.nanargmax(dIdE)]) if dIdE.size else np.nan
+
     else:
         raise ValueError(f"Unknown smoothfunctionIV: {smoothfunctionIV!r}")
 
-    # Ion flux calculation
     valid = (E > 0) & (dIdE > 0)
     S = np.trapezoid(dIdE[valid], E[valid]) if np.any(valid) else 0.0
 
     corr_fac = ion_flux_pressure_correction(pressure)
     flux = S * corr_fac
 
-    # MATLAB: v_Bohm = sqrt(3/(40*1.66e-27));  (note: dimensionally odd, but kept as-is)
     v_Bohm = np.sqrt(Te / (Mi * 1.66e-27))
     ni = flux / (0.6 * v_Bohm) if v_Bohm != 0 else np.nan
 
@@ -301,18 +315,11 @@ def smoothIV_SinglePeak(
     Epeak_temp: float = np.nan,
     Window: int = 10,
 ) -> Tuple[float, np.ndarray, np.ndarray]:
-    """
-    Recursive single-peak smoothing logic translated from MATLAB.
-
-    Returns:
-      Epeakex, Iex, Vex
-    """
     I = np.asarray(I, dtype=float).ravel()
     V = np.asarray(V, dtype=float).ravel()
     x = int(Window)
 
     def _detect_peak_energy(dIdE: np.ndarray, Vx: np.ndarray) -> float:
-        # MATLAB searches dIdE(10:end-100) over V(10:end-100)
         lo = 9
         hi = max(lo + 1, dIdE.size - 100)
         yy = dIdE[lo:hi]
@@ -328,7 +335,6 @@ def smoothIV_SinglePeak(
         if peaks.size == 0:
             return float(xx[np.nanargmax(yy)])
 
-        # take the most prominent peak
         prominences = props.get("prominences", np.ones_like(peaks, dtype=float))
         best = int(peaks[np.argmax(prominences)])
         return float(xx[best])
@@ -348,7 +354,6 @@ def smoothIV_SinglePeak(
 
         return smoothIV_SinglePeak(Ismooth, V, Epeak=Epeak_temp, Epeak_temp=np.nan, Window=Window)
 
-    # second stage: compare peaks
     if (not _is_nan(Epeak_temp)) and (abs(Epeak_temp - Epeak) < 0.1):
         return float(Epeak), I, V
 
@@ -367,10 +372,6 @@ def smoothIV_SinglePeak(
     return smoothIV_SinglePeak(Ismooth, V, Epeak=Epeak_temp2, Epeak_temp=Epeak, Window=Window)
 
 
-# -----------------------------
-# Physics helpers + plotting
-# -----------------------------
-
 def ion_flux_pressure_correction(pressure: float) -> float:
     fix_corr = 1.12e-3
     Ng = 3.25e22 * pressure * 0.0075
@@ -381,16 +382,12 @@ def ion_flux_pressure_correction(pressure: float) -> float:
 
 
 def plotgraphIEDF(V, Iavg, Isth, E, dIdE):
-    import numpy as np
-    import matplotlib.pyplot as plt
-
     V = np.asarray(V).ravel()
     Iavg = np.asarray(Iavg).ravel()
     Isth = np.asarray(Isth).ravel()
     E = np.asarray(E).ravel()
     dIdE = np.asarray(dIdE).ravel()
 
-    # --- Match lengths for IV curves ---
     n_iv = min(len(V), len(Iavg), len(Isth))
     Vp = V[:n_iv]
     Iavgp = Iavg[:n_iv]
@@ -398,7 +395,6 @@ def plotgraphIEDF(V, Iavg, Isth, E, dIdE):
 
     fig, ax1 = plt.subplots()
 
-    # ----- Left axis: I–V -----
     ax1.plot(Vp, Iavgp, color="black", linewidth=3, label="Current")
     ax1.plot(Vp, Isthp, color="green", linewidth=3, label="Smoothed")
 
@@ -415,14 +411,12 @@ def plotgraphIEDF(V, Iavg, Isth, E, dIdE):
     ax1.legend()
     ax1.set_title("I–V curve and IEDF")
 
-    # ----- Right axis: IEDF -----
     ax2 = ax1.twinx()
 
     n_e = min(len(E), len(dIdE))
     Ep = E[:n_e]
     dIdEp = dIdE[:n_e]
 
-    # MATLAB trims last 10 points
     if n_e > 10:
         Ep = Ep[:-10]
         dIdEp = dIdEp[:-10]
@@ -437,7 +431,6 @@ def plotgraphIEDF(V, Iavg, Isth, E, dIdE):
     ax2.set_ylim(0, ymax)
 
     plt.show()
-
 
 
 def tau_ratio_NF(Mi: float, f_rf: float, Vp: float, ni: float, Te: float = 3.0, alpha: float = 3.0) -> float:

@@ -1,27 +1,27 @@
 [Setup]
-AppName=IEDFbyPH
-AppVersion=1.0.0
+AppName=IEDF-Nanolino-
+AppVersion=1.1.0
 AppPublisher=Universität Basel/ Paul Hiret
 AppPublisherURL=mailto:paul.hiret@unibas.ch
-DefaultDirName={pf}\IEDFbyPH
-DefaultGroupName=IEDFbyPH
+DefaultDirName={pf}\IEDF-Nanolino
+DefaultGroupName=IEDF-Nanolino-
 DisableProgramGroupPage=yes
 OutputDir=installer
-OutputBaseFilename=IEDFbyPH_setup
+OutputBaseFilename=IEDF-Nanolino-_setup
 SetupIconFile=icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 
 [Files]
-Source: "dist\IEDFbyPH\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+Source: "dist\IEDF-Nanolino\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\IEDFbyPH"; Filename: "{app}\IEDFbyPH.exe"
-Name: "{commondesktop}\IEDFbyPH"; Filename: "{app}\IEDFbyPH.exe"; Tasks: desktopicon
+Name: "{group}\IEDFby"; Filename: "{app}\IEDF-Nanolino.exe"
+Name: "{commondesktop}\IEDF-Nanolino"; Filename: "{app}\IEDF-Nanolino.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Additional icons:"
 
 [Run]
-Filename: "{app}\IEDFbyPH.exe"; Description: "Launch RFEA Analyzer"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\IEDF-Nanolino.exe"; Description: "Launch RFEA Analyser"; Flags: nowait postinstall skipifsilent

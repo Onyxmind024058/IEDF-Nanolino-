@@ -9,7 +9,8 @@ from urllib.error import URLError, HTTPError
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QDoubleSpinBox, QSpinBox, QComboBox,
-    QLabel, QGroupBox, QMessageBox, QSplitter
+    QLabel, QGroupBox, QMessageBox, QSplitter, QDialog,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
@@ -18,20 +19,22 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.widgets import SpanSelector
 
-from Python_RFEA_Analysis_fcn import full_analysis
+from Python_RFEA_Analysis_fcn import (
+    full_analysis,
+    import_file,
+    separate_traces_from_table,
+    traceaverage_and_smooth,
+)
 
 
 # ============================================================
 # App / GitHub release settings
 # ============================================================
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.1.0"
 GITHUB_OWNER = "Onyxmind024058"
-GITHUB_REPO = "IEDFbyPH"
-
-# Optional:
-# If you only want to auto-open a specific asset type when an update exists,
-# list extensions in order of preference.
+GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
 
 
@@ -45,15 +48,6 @@ def normalize_version(v: str) -> str:
 
 
 def parse_version_tuple(v: str) -> tuple[int, ...]:
-    """
-    Simple numeric version parser:
-    '1.2.3' -> (1, 2, 3)
-    'v1.2.3' -> (1, 2, 3)
-    '1.2' -> (1, 2)
-
-    Non-numeric suffixes are ignored in each dot-separated chunk:
-    '1.2.3-beta1' -> (1, 2, 3)
-    """
     v = normalize_version(v)
     if not v:
         return (0,)
@@ -66,10 +60,7 @@ def parse_version_tuple(v: str) -> tuple[int, ...]:
                 digits += ch
             else:
                 break
-        if digits == "":
-            parts.append(0)
-        else:
-            parts.append(int(digits))
+        parts.append(int(digits) if digits else 0)
     return tuple(parts) if parts else (0,)
 
 
@@ -78,9 +69,6 @@ def is_newer_version(latest_tag: str, current_version: str) -> bool:
 
 
 def get_latest_github_release(owner: str, repo: str) -> dict:
-    """
-    Fetch latest GitHub release metadata.
-    """
     url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -93,15 +81,10 @@ def get_latest_github_release(owner: str, repo: str) -> dict:
 
 
 def choose_best_asset(release: dict) -> str | None:
-    """
-    Pick the first release asset matching preferred extensions.
-    Falls back to None if nothing matches.
-    """
     assets = release.get("assets", [])
     if not isinstance(assets, list):
         return None
 
-    # Try preferred extensions first
     for ext in PREFERRED_ASSET_EXTENSIONS:
         for asset in assets:
             name = str(asset.get("name", "")).lower()
@@ -109,12 +92,10 @@ def choose_best_asset(release: dict) -> str | None:
             if name.endswith(ext) and url:
                 return url
 
-    # Fallback: first asset with browser_download_url
     for asset in assets:
         url = asset.get("browser_download_url")
         if url:
             return url
-
     return None
 
 
@@ -122,7 +103,7 @@ def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(resource_path("icon.ico")))
     w = MainWindow()
-    w.resize(1100, 650)
+    w.resize(1200, 700)
     w.show()
     sys.exit(app.exec())
 
@@ -135,6 +116,206 @@ class MplCanvas(FigureCanvas):
         super().__init__(fig)
 
 
+class ManualRangeCanvas(FigureCanvas):
+    def __init__(self, parent=None):
+        fig = Figure()
+        self.ax = fig.add_subplot(111)
+        super().__init__(fig)
+
+
+class ManualSmoothingDialog(QDialog):
+    """
+    Dialog for defining manual smoothing ranges.
+    Each range is defined by [xmin, xmax, window].
+    """
+
+    def __init__(self, Vavg, Iavg, existing_ranges=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manual smoothing")
+        self.resize(1000, 700)
+
+        self.Vavg = np.asarray(Vavg, dtype=float).ravel()
+        self.Iavg = np.asarray(Iavg, dtype=float).ravel()
+        self.ranges = [dict(r) for r in (existing_ranges or [])]
+
+        root = QVBoxLayout(self)
+
+        self.canvas = ManualRangeCanvas(self)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+
+        root.addWidget(self.toolbar)
+        root.addWidget(self.canvas, 1)
+
+        info = QLabel(
+            "Drag on the plot to add a range. "
+            "Each range has its own moving-average window. "
+            "Select a row and click Delete selected range to remove it."
+        )
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["xmin", "xmax", "window"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        root.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        self.btn_delete = QPushButton("Delete selected range")
+        self.btn_clear = QPushButton("Clear all")
+        self.btn_apply = QPushButton("OK")
+        self.btn_cancel = QPushButton("Cancel")
+
+        btn_row.addWidget(self.btn_delete)
+        btn_row.addWidget(self.btn_clear)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_apply)
+        btn_row.addWidget(self.btn_cancel)
+        root.addLayout(btn_row)
+
+        self.btn_delete.clicked.connect(self.delete_selected)
+        self.btn_clear.clicked.connect(self.clear_all)
+        self.btn_apply.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.table.itemChanged.connect(self.on_table_changed)
+        self.table.itemSelectionChanged.connect(self.redraw_plot)
+
+        self.span = SpanSelector(
+            self.canvas.ax,
+            self.on_span_selected,
+            "horizontal",
+            useblit=True,
+            interactive=False,
+            drag_from_anywhere=False,
+            props=dict(alpha=0.25, facecolor="tab:blue"),
+        )
+
+        self.populate_table()
+        self.redraw_plot()
+
+    def on_span_selected(self, xmin, xmax):
+        if xmin is None or xmax is None:
+            return
+        if abs(xmax - xmin) < 1e-12:
+            return
+
+        a, b = sorted([float(xmin), float(xmax)])
+        self.ranges.append({"xmin": a, "xmax": b, "window": 20})
+        self.populate_table(select_last=True)
+        self.redraw_plot()
+
+    def populate_table(self, select_last=False):
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.ranges))
+
+        for row, r in enumerate(self.ranges):
+            xmin_item = QTableWidgetItem(f"{float(r['xmin']):.6g}")
+            xmax_item = QTableWidgetItem(f"{float(r['xmax']):.6g}")
+            win_item = QTableWidgetItem(str(int(r["window"])))
+
+            xmin_item.setTextAlignment(Qt.AlignCenter)
+            xmax_item.setTextAlignment(Qt.AlignCenter)
+            win_item.setTextAlignment(Qt.AlignCenter)
+
+            self.table.setItem(row, 0, xmin_item)
+            self.table.setItem(row, 1, xmax_item)
+            self.table.setItem(row, 2, win_item)
+
+        self.table.blockSignals(False)
+
+        if select_last and self.ranges:
+            self.table.selectRow(len(self.ranges) - 1)
+
+    def on_table_changed(self, item):
+        row = item.row()
+        col = item.column()
+        if row < 0 or row >= len(self.ranges):
+            return
+
+        text = item.text().strip()
+        try:
+            if col == 0:
+                self.ranges[row]["xmin"] = float(text)
+            elif col == 1:
+                self.ranges[row]["xmax"] = float(text)
+            elif col == 2:
+                win = max(1, int(float(text)))
+                self.ranges[row]["window"] = win
+                item.setText(str(win))
+        except ValueError:
+            # restore previous values
+            self.populate_table()
+            return
+
+        if self.ranges[row]["xmin"] > self.ranges[row]["xmax"]:
+            self.ranges[row]["xmin"], self.ranges[row]["xmax"] = (
+                self.ranges[row]["xmax"],
+                self.ranges[row]["xmin"],
+            )
+            self.populate_table(select_last=False)
+
+        self.redraw_plot()
+
+    def delete_selected(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.ranges):
+            return
+        del self.ranges[row]
+        self.populate_table()
+        self.redraw_plot()
+
+    def clear_all(self):
+        self.ranges = []
+        self.populate_table()
+        self.redraw_plot()
+
+    def redraw_plot(self):
+        ax = self.canvas.ax
+        ax.clear()
+
+        ax.plot(self.Vavg, self.Iavg, linewidth=2)
+        ax.set_xlabel("Energy (eV)")
+        ax.set_ylabel("Current (A)")
+        ax.set_title("Manual smoothing range selection")
+        ax.grid(True)
+
+        selected_row = self.table.currentRow()
+
+        for idx, r in enumerate(self.ranges):
+            xmin = float(r["xmin"])
+            xmax = float(r["xmax"])
+            alpha = 0.35 if idx == selected_row else 0.18
+            ax.axvspan(xmin, xmax, alpha=alpha)
+            xc = 0.5 * (xmin + xmax)
+            ymin, ymax = ax.get_ylim()
+            ytext = ymin + 0.9 * (ymax - ymin)
+            ax.text(
+                xc,
+                ytext,
+                f"w={int(r['window'])}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.2", alpha=0.35),
+            )
+
+        self.canvas.draw_idle()
+
+    def get_ranges(self):
+        cleaned = []
+        for r in self.ranges:
+            xmin = float(r["xmin"])
+            xmax = float(r["xmax"])
+            win = max(1, int(r["window"]))
+            if xmax < xmin:
+                xmin, xmax = xmax, xmin
+            cleaned.append({"xmin": xmin, "xmax": xmax, "window": win})
+
+        cleaned.sort(key=lambda x: x["xmin"])
+        return cleaned
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -144,7 +325,8 @@ class MainWindow(QMainWindow):
         self.csv_path: Path | None = None
         self._last_left_width = 300
 
-        # Holds latest computed arrays for exporting / hover
+        self.manual_ranges = []
+
         self.last = {
             "Vavg": None,
             "Iavg": None,
@@ -153,7 +335,6 @@ class MainWindow(QMainWindow):
             "dIdE": None,
         }
 
-        # ---------------- Root / splitter ----------------
         root = QWidget()
         self.setCentralWidget(root)
         main_layout = QHBoxLayout(root)
@@ -193,7 +374,7 @@ class MainWindow(QMainWindow):
         pb.addWidget(self.smooth_didv)
 
         self.smooth_method = QComboBox()
-        self.smooth_method.addItems(["Recursive", "Mavg", "SG"])
+        self.smooth_method.addItems(["Recursive", "Mavg", "SG", "Manual"])
         pb.addWidget(QLabel("smoothfunctionIV"))
         pb.addWidget(self.smooth_method)
 
@@ -222,6 +403,9 @@ class MainWindow(QMainWindow):
         pb.addWidget(self.sg_poly)
         pb.addWidget(QLabel("SG window_length (odd)"))
         pb.addWidget(self.sg_win)
+
+        self.btn_manual_smoothing = QPushButton("Manual smoothing…")
+        pb.addWidget(self.btn_manual_smoothing)
 
         pb.addWidget(QLabel("Vp (V)"))
         self.vp = QDoubleSpinBox()
@@ -259,6 +443,10 @@ class MainWindow(QMainWindow):
         pb.addWidget(self.alpha)
 
         controls.addWidget(param_box)
+
+        self.lbl_manual_summary = QLabel("Manual ranges: none")
+        self.lbl_manual_summary.setWordWrap(True)
+        controls.addWidget(self.lbl_manual_summary)
 
         self.lbl_stats = QLabel("")
         self.lbl_stats.setAlignment(Qt.AlignTop)
@@ -299,14 +487,12 @@ class MainWindow(QMainWindow):
         )
         self._cid_move = self.canvas.mpl_connect("motion_notify_event", self.on_mouse_move)
 
-        # ---------------- Splitter setup ----------------
         self.splitter.addWidget(self.left_panel)
         self.splitter.addWidget(self.plot_panel)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([300, 800])
+        self.splitter.setSizes([330, 870])
 
-        # ---------------- Signals ----------------
         self.btn_open.clicked.connect(self.open_file)
         self.btn_run.clicked.connect(self.run)
         self.btn_export_csv.clicked.connect(self.export_csv)
@@ -314,6 +500,9 @@ class MainWindow(QMainWindow):
         self.btn_check_updates.clicked.connect(lambda: self.check_for_updates(silent=False))
         self.btn_about.clicked.connect(self.show_about)
         self.btn_toggle_panel.clicked.connect(self.toggle_left_panel)
+        self.btn_manual_smoothing.clicked.connect(self.open_manual_smoothing_dialog)
+
+        self.smooth_method.currentIndexChanged.connect(self.on_smoothing_method_changed)
         self.smooth_method.currentIndexChanged.connect(self.sync_param_visibility)
 
         auto_widgets = [
@@ -337,8 +526,8 @@ class MainWindow(QMainWindow):
                 w.currentIndexChanged.connect(self.run)
 
         self.sync_param_visibility()
+        self.update_manual_summary()
 
-        # Silent update check shortly after startup
         QTimer.singleShot(1200, lambda: self.check_for_updates(silent=True))
 
     def sync_param_visibility(self):
@@ -347,6 +536,23 @@ class MainWindow(QMainWindow):
         self.mavg_window.setEnabled(method == "Mavg")
         self.sg_poly.setEnabled(method == "SG")
         self.sg_win.setEnabled(method == "SG")
+        self.btn_manual_smoothing.setEnabled(method == "Manual")
+
+    def on_smoothing_method_changed(self):
+        if self.smooth_method.currentText() == "Manual":
+            self.update_manual_summary()
+
+    def update_manual_summary(self):
+        if not self.manual_ranges:
+            self.lbl_manual_summary.setText("Manual ranges: none")
+            return
+
+        txt = [f"Manual ranges: {len(self.manual_ranges)}"]
+        for i, r in enumerate(self.manual_ranges, start=1):
+            txt.append(
+                f"{i}) [{r['xmin']:.3g}, {r['xmax']:.3g}]  w={int(r['window'])}"
+            )
+        self.lbl_manual_summary.setText("\n".join(txt))
 
     def toggle_left_panel(self):
         if self.left_panel.isVisible():
@@ -367,6 +573,34 @@ class MainWindow(QMainWindow):
         self.csv_path = Path(path)
         self.lbl_file.setText(str(self.csv_path))
         self.run()
+
+    def _compute_raw_iv_for_manual_dialog(self):
+        if self.csv_path is None or not self.csv_path.exists():
+            raise ValueError("Please open a CSV file first.")
+
+        electrode_voltage, ion_flux, traces_df = import_file(str(self.csv_path))
+        I, V = separate_traces_from_table(traces_df)
+        _, Iavg, Vavg = traceaverage_and_smooth(I, V, electrode_voltage, 10)
+        return Vavg, Iavg
+
+    def open_manual_smoothing_dialog(self):
+        try:
+            Vavg, Iavg = self._compute_raw_iv_for_manual_dialog()
+        except Exception as e:
+            QMessageBox.warning(self, "Manual smoothing", str(e))
+            return
+
+        dlg = ManualSmoothingDialog(
+            Vavg=Vavg,
+            Iavg=Iavg,
+            existing_ranges=self.manual_ranges,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            self.manual_ranges = dlg.get_ranges()
+            self.update_manual_summary()
+            if self.smooth_method.currentText() == "Manual":
+                self.run()
 
     def show_about(self):
         name = "RFEA analysis by P. Hiret"
@@ -401,27 +635,15 @@ class MainWindow(QMainWindow):
             release = get_latest_github_release(GITHUB_OWNER, GITHUB_REPO)
         except HTTPError as e:
             if not silent:
-                QMessageBox.warning(
-                    self,
-                    "Update check failed",
-                    f"GitHub returned an error:\nHTTP {e.code} - {e.reason}"
-                )
+                QMessageBox.warning(self, "Update check failed", f"GitHub returned an error:\nHTTP {e.code} - {e.reason}")
             return
         except URLError as e:
             if not silent:
-                QMessageBox.warning(
-                    self,
-                    "Update check failed",
-                    f"Could not reach GitHub:\n{e}"
-                )
+                QMessageBox.warning(self, "Update check failed", f"Could not reach GitHub:\n{e}")
             return
         except Exception as e:
             if not silent:
-                QMessageBox.warning(
-                    self,
-                    "Update check failed",
-                    f"Unexpected error:\n{e}"
-                )
+                QMessageBox.warning(self, "Update check failed", f"Unexpected error:\n{e}")
             return
 
         latest_tag = str(release.get("tag_name", "")).strip()
@@ -436,11 +658,7 @@ class MainWindow(QMainWindow):
 
         if not is_newer_version(latest_tag, APP_VERSION):
             if not silent:
-                QMessageBox.information(
-                    self,
-                    "No update available",
-                    f"You already have the latest version ({APP_VERSION})."
-                )
+                QMessageBox.information(self, "No update available", f"You already have the latest version ({APP_VERSION}).")
             return
 
         latest_version = normalize_version(latest_tag)
@@ -595,11 +813,15 @@ class MainWindow(QMainWindow):
             smoothIVparam = int(self.Recursive_window.value())
         elif method == "Mavg":
             smoothIVparam = int(self.mavg_window.value())
-        else:
+        elif method == "SG":
             win = int(self.sg_win.value())
             if win % 2 == 0:
                 win += 1
             smoothIVparam = (int(self.sg_poly.value()), win)
+        elif method == "Manual":
+            smoothIVparam = {"ranges": self.manual_ranges}
+        else:
+            smoothIVparam = None
 
         Vp = float(self.vp.value())
         Mi = float(self.mi.value())
