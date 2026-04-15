@@ -4,4 +4,4 @@ if __name__ == "__main__":
     main()
 
 
-# pyinstaller --noconsole --onedir --name IEDFbyPH --icon icon.ico main.py
+# pyinstaller --noconsole --onedir --name IEDF-Nanolino- --icon icon.ico main.py
