@@ -360,6 +360,11 @@ class MainWindow(QMainWindow):
         param_box = QGroupBox("Parameters")
         pb = QVBoxLayout(param_box)
 
+        self.Flux_factor_wid = QComboBox()
+        self.Flux_factor_wid.addItems(["Default: 6.374E5", "High density: 6.32E5", "Low density: 5.30E4"])
+        pb.addWidget(QLabel("Flux factor"))
+        pb.addWidget(self.Flux_factor_wid)
+
         self.pressure = QDoubleSpinBox()
         self.pressure.setRange(0.0, 1e9)
         self.pressure.setValue(1.0)
@@ -518,6 +523,7 @@ class MainWindow(QMainWindow):
             self.te,
             self.alpha,
             self.smooth_method,
+            self.Flux_factor_wid,
         ]
         for w in auto_widgets:
             if hasattr(w, "valueChanged"):
@@ -809,6 +815,14 @@ class MainWindow(QMainWindow):
         SmoothFactordIdV = int(self.smooth_didv.value())
         method = self.smooth_method.currentText()
 
+        Flux_factor_string = self.Flux_factor_wid.currentText()
+        if  Flux_factor_string == "High density: 6.32E5":
+            Flux_factor = 6.32e5
+        elif Flux_factor_string == "Low density: 5.30E4":
+            Flux_factor = 5.3e4
+        else:
+            Flux_factor = 6.374e5
+
         if method == "Recursive":
             smoothIVparam = int(self.Recursive_window.value())
         elif method == "Mavg":
@@ -847,6 +861,7 @@ class MainWindow(QMainWindow):
                 Vp=Vp,
                 Te=Te,
                 alpha=alpha,
+                Flux_factor= Flux_factor
             )
         except Exception as e:
             QMessageBox.critical(self, "Analysis failed", str(e))
