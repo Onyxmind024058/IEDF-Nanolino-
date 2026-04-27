@@ -32,7 +32,7 @@ from Python_RFEA_Analysis_fcn import (
 # ============================================================
 # App / GitHub release settings
 # ============================================================
-APP_VERSION = "1.1.0.a"
+APP_VERSION = "1.1.2"
 GITHUB_OWNER = "Onyxmind024058"
 GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
