@@ -1,4 +1,4 @@
-# IEDFbyPH
+# IEDF-Nanolino-
 
 # **RFEA Analyzer – User Manual**
 
@@ -72,18 +72,24 @@ The CSV file must contain:
 
 ## 5. Analysis Parameters
 
-### 5.1 Pressure
+### 5.1 Gas and grids parameter
+- **Grids transmission** is by default 53.9% for low density it is 70%
+- **Number of holes** is 37 by default
+- **Radius of holes** is 0.4mm or 0.0004m by default
+- **Gas for cross-sections**: so far only Ar and He are available. Ar Impedans is 8.8e-19m2, Ar kinetic is 5.1e-19m2 and He impedans is 2.9e-19m2
+
+### 5.2 Pressure
 
 - **Units:** same as acquisition (typically Pa or mTorr)
 - Used for ion flux correction
 
-### 5.2 Smoothing of dI/dE
+### 5.3 Smoothing of dI/dE
 
 - **SmoothFactordIdV**
 - Controls smoothing applied to the derivative used for the IEDF
 - Higher values → smoother IEDF, less noise
 
-### 5.3 I–V Smoothing Method
+### 5.4 I–V Smoothing Method
 
 Choose one of the following:
 
