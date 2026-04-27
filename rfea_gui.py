@@ -32,7 +32,7 @@ from Python_RFEA_Analysis_fcn import (
 # ============================================================
 # App / GitHub release settings
 # ============================================================
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.0.a"
 GITHUB_OWNER = "Onyxmind024058"
 GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
@@ -360,10 +360,31 @@ class MainWindow(QMainWindow):
         param_box = QGroupBox("Parameters")
         pb = QVBoxLayout(param_box)
 
-        self.Flux_factor_wid = QComboBox()
-        self.Flux_factor_wid.addItems(["Default: 6.374E5", "High density: 6.32E5", "Low density: 5.30E4"])
-        pb.addWidget(QLabel("Flux factor"))
-        pb.addWidget(self.Flux_factor_wid)
+        self.transmission_wid = QDoubleSpinBox()
+        self.transmission_wid.setRange(0, 100)
+        self.transmission_wid.setValue(53.9)
+        self.transmission_wid.setDecimals(1)
+        pb.addWidget(QLabel("Grids transmissions (%)"))
+        pb.addWidget(self.transmission_wid)
+
+        self.nbholes_wid = QDoubleSpinBox()
+        self.nbholes_wid.setRange(1, 100)
+        self.nbholes_wid.setValue(37)
+        self.nbholes_wid.setDecimals(0)
+        pb.addWidget(QLabel("Number of holes"))
+        pb.addWidget(self.nbholes_wid)
+
+        self.radholes_wid = QDoubleSpinBox()
+        self.radholes_wid.setRange(0, 1E-3)
+        self.radholes_wid.setValue(4E-4)
+        self.radholes_wid.setDecimals(1)
+        pb.addWidget(QLabel("Radius of holes (m)"))
+        pb.addWidget(self.radholes_wid)
+
+        self.gas_wid = QComboBox()
+        self.gas_wid.addItems(["Ar Impedans", "Ar kinetic", "He Impedans"])
+        pb.addWidget(QLabel("Gas (for cross-section"))
+        pb.addWidget(self.gas_wid)
 
         self.pressure = QDoubleSpinBox()
         self.pressure.setRange(0.0, 1e9)
@@ -523,7 +544,7 @@ class MainWindow(QMainWindow):
             self.te,
             self.alpha,
             self.smooth_method,
-            self.Flux_factor_wid,
+            self.transmission_wid,
         ]
         for w in auto_widgets:
             if hasattr(w, "valueChanged"):
@@ -815,13 +836,20 @@ class MainWindow(QMainWindow):
         SmoothFactordIdV = int(self.smooth_didv.value())
         method = self.smooth_method.currentText()
 
-        Flux_factor_string = self.Flux_factor_wid.currentText()
-        if  Flux_factor_string == "High density: 6.32E5":
-            Flux_factor = 6.32e5
-        elif Flux_factor_string == "Low density: 5.30E4":
-            Flux_factor = 5.3e4
-        else:
-            Flux_factor = 6.374e5
+        transmission = float(self.transmission_wid.value())
+        nbholes = float(self.nbholes_wid.value())
+        radius_hole = float(self.radholes_wid.value())
+        area = np.pi*(radius_hole**2)*nbholes
+        Flux_factor = 1/(area*transmission**4)
+
+        gas = self.gas_wid.currentText()
+        if gas == "Ar kinetic":
+            collision_cross_section = 5.1e-19
+        elif gas == "Ar Impedans":
+            collision_cross_section = 8.8e-19
+        elif gas == "He":
+            collision_cross_section = 8.8e-19 / 3
+
 
         if method == "Recursive":
             smoothIVparam = int(self.Recursive_window.value())
@@ -861,7 +889,8 @@ class MainWindow(QMainWindow):
                 Vp=Vp,
                 Te=Te,
                 alpha=alpha,
-                Flux_factor= Flux_factor
+                Flux_factor= Flux_factor,
+                collision_cross_section = collision_cross_section
             )
         except Exception as e:
             QMessageBox.critical(self, "Analysis failed", str(e))

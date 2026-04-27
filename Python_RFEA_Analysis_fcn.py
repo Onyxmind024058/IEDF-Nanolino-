@@ -28,6 +28,7 @@ def full_analysis(
     Te: float = 3.0,
     alpha: float = 3.0,
     Flux_factor: float=6.374e5,
+    collision_cross_section: float= 8.8e-19,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, float, np.ndarray, np.ndarray, float, Optional[float], np.ndarray]:
     """
     Returns:
@@ -59,7 +60,8 @@ def full_analysis(
         smoothIVparam=smoothIVparam,
         Mi=Mi,
         Te=Te,
-        Flux_factor=Flux_factor
+        Flux_factor=Flux_factor,
+        collision_cross_section=collision_cross_section
     )
 
     if boolplot:
@@ -247,6 +249,7 @@ def iedf(
     Mi: float,
     Te: float,
     Flux_factor: float,
+    collision_cross_section: float,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, np.ndarray]:
     """
     Returns: Eavg, flux, dIdE, E, ni, Epeak, Ismooth
@@ -300,7 +303,8 @@ def iedf(
     valid = (E > 0) & (dIdE > 0)
     S = np.trapezoid(dIdE[valid], E[valid]) if np.any(valid) else 0.0
 
-    corr_fac = ion_flux_pressure_correction(pressure, Flux_factor)
+    corr_fac = ion_flux_pressure_correction(pressure, Flux_factor, collision_cross_section)
+    dIdE = dIdE * corr_fac
     flux = S * corr_fac
 
     v_Bohm = np.sqrt(Te / (Mi * 1.66e-27))
@@ -375,10 +379,10 @@ def smoothIV_SinglePeak(
     return smoothIV_SinglePeak(Ismooth, V, Epeak=Epeak_temp2, Epeak_temp=Epeak, Window=Window)
 
 
-def ion_flux_pressure_correction(pressure: float, Flux_factor: float) -> float:
+def ion_flux_pressure_correction(pressure: float, Flux_factor: float, collision_cross_section: float) -> float:
     fix_corr = 1.12e-3
     Ng = 3.25e22 * pressure * 0.0075
-    IMF = 1.0 / (Ng * 8.8e-19)
+    IMF = 1.0 / (Ng * collision_cross_section) #8.8e-19 for Argon
     Pc = np.exp(-fix_corr / IMF)
     corr_fac = Flux_factor / Pc
     return float(corr_fac)
