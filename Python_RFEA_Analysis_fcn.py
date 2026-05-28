@@ -29,6 +29,7 @@ def full_analysis(
     alpha: float = 3.0,
     Flux_factor: float=6.374e5,
     collision_cross_section: float= 8.8e-19,
+    voltage_shift: bool = False,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, float, np.ndarray, np.ndarray, float, Optional[float], np.ndarray]:
     """
     Returns:
@@ -49,7 +50,7 @@ def full_analysis(
     Electrode_Voltage, Ion_flux, traces_df = import_file(filename)
     I, V = separate_traces_from_table(traces_df)
 
-    Isth, Iavg, Vavg = traceaverage_and_smooth(I, V, Electrode_Voltage, SmoothFactorIV)
+    Isth, Iavg, Vavg = traceaverage_and_smooth(I, V, Electrode_Voltage, SmoothFactorIV, voltage_shift)
 
     Eavg, flux, dIdE, E, ni, Epeak, Ismooth = iedf(
         Isth,
@@ -166,8 +167,13 @@ def traceaverage_and_smooth(
     V: np.ndarray,
     Electrode_Voltage: float,
     SmoothFactorIV: int,
+    voltage_shift: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    Vavg = np.mean(V, axis=1) - Electrode_Voltage
+
+    if voltage_shift:
+        Vavg = np.mean(V, axis=1) - Electrode_Voltage
+    else:
+        Vavg = np.mean(V, axis=1)
     Iavg = np.mean(I, axis=1)
     Isth = smooth_1d(Iavg, SmoothFactorIV)
     return Isth, Iavg, Vavg

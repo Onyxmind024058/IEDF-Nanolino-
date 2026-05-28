@@ -1,6 +1,6 @@
 [Setup]
 AppName=IEDF-Nanolino-
-AppVersion=1.1.1
+AppVersion=1.1.3
 AppPublisher=Universität Basel/ Paul Hiret
 AppPublisherURL=mailto:paul.hiret@unibas.ch
 DefaultDirName={pf}\IEDF-Nanolino-

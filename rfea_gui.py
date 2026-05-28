@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QDoubleSpinBox, QSpinBox, QComboBox,
     QLabel, QGroupBox, QMessageBox, QSplitter, QDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
@@ -32,7 +33,7 @@ from Python_RFEA_Analysis_fcn import (
 # ============================================================
 # App / GitHub release settings
 # ============================================================
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 GITHUB_OWNER = "Onyxmind024058"
 GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
@@ -468,6 +469,10 @@ class MainWindow(QMainWindow):
         self.alpha.setValue(3.0)
         pb.addWidget(self.alpha)
 
+        self.voltage_shift_wid = QCheckBox("Voltage Shift")
+        self.voltage_shift_wid.setChecked(False)
+        pb.addWidget(self.voltage_shift_wid)
+
         controls.addWidget(param_box)
 
         self.lbl_manual_summary = QLabel("Manual ranges: none")
@@ -543,6 +548,7 @@ class MainWindow(QMainWindow):
             self.frf,
             self.te,
             self.alpha,
+            self.voltage_shift_wid,
             self.smooth_method,
             self.transmission_wid,
         ]
@@ -551,6 +557,8 @@ class MainWindow(QMainWindow):
                 w.valueChanged.connect(self.run)
             if hasattr(w, "currentIndexChanged"):
                 w.currentIndexChanged.connect(self.run)
+            if hasattr(w, "stateChanged"):
+                w.stateChanged.connect(self.run)
 
         self.sync_param_visibility()
         self.update_manual_summary()
@@ -870,6 +878,7 @@ class MainWindow(QMainWindow):
         f_rf = float(self.frf.value())
         Te = float(self.te.value())
         alpha = float(self.alpha.value())
+        voltage_shift = self.voltage_shift_wid.isChecked()
 
         try:
             (
@@ -890,7 +899,8 @@ class MainWindow(QMainWindow):
                 Te=Te,
                 alpha=alpha,
                 Flux_factor= Flux_factor,
-                collision_cross_section = collision_cross_section
+                collision_cross_section = collision_cross_section,
+                voltage_shift = voltage_shift,
             )
         except Exception as e:
             QMessageBox.critical(self, "Analysis failed", str(e))
