@@ -878,6 +878,7 @@ class MainWindow(QMainWindow):
         f_rf = float(self.frf.value())
         Te = float(self.te.value())
         alpha = float(self.alpha.value())
+
         voltage_shift = self.voltage_shift_wid.isChecked()
 
         try:
