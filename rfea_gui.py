@@ -376,10 +376,10 @@ class MainWindow(QMainWindow):
         pb.addWidget(self.nbholes_wid)
 
         self.radholes_wid = QDoubleSpinBox()
-        self.radholes_wid.setRange(0, 1E-3)
-        self.radholes_wid.setValue(4E-4)
-        self.radholes_wid.setDecimals(1)
-        pb.addWidget(QLabel("Radius of holes (m)"))
+        self.radholes_wid.setRange(0,1000)
+        self.radholes_wid.setValue(40)
+        self.radholes_wid.setDecimals(3)
+        pb.addWidget(QLabel("Radius of holes (µm)"))
         pb.addWidget(self.radholes_wid)
 
         self.gas_wid = QComboBox()
@@ -472,6 +472,12 @@ class MainWindow(QMainWindow):
         self.voltage_shift_wid = QCheckBox("Voltage Shift")
         self.voltage_shift_wid.setChecked(False)
         pb.addWidget(self.voltage_shift_wid)
+
+        self.voltage_shift_val_wid = QDoubleSpinBox()
+        self.voltage_shift_val_wid.setRange(-1000, 1000)
+        self.voltage_shift_val_wid.setDecimals(4)
+        self.voltage_shift_val_wid.setValue(0.0)
+        pb.addWidget(self.voltage_shift_val_wid)
 
         controls.addWidget(param_box)
 
@@ -846,7 +852,7 @@ class MainWindow(QMainWindow):
 
         transmission = float(self.transmission_wid.value())
         nbholes = float(self.nbholes_wid.value())
-        radius_hole = float(self.radholes_wid.value())
+        radius_hole = float(self.radholes_wid.value())*1e-6
         area = np.pi*(radius_hole**2)*nbholes
         Flux_factor = 1/(area*transmission**4)
 
@@ -879,7 +885,11 @@ class MainWindow(QMainWindow):
         Te = float(self.te.value())
         alpha = float(self.alpha.value())
 
-        voltage_shift = self.voltage_shift_wid.isChecked()
+
+        if self.voltage_shift_wid.isChecked():
+            voltage_shift = self.voltage_shift_val_wid.value()
+        else:
+            voltage_shift = 0
 
         try:
             (

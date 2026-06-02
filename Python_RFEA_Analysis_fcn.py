@@ -29,7 +29,7 @@ def full_analysis(
     alpha: float = 3.0,
     Flux_factor: float=6.374e5,
     collision_cross_section: float= 8.8e-19,
-    voltage_shift: bool = False,
+    voltage_shift: float = 0,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, float, float, float, np.ndarray, np.ndarray, float, Optional[float], np.ndarray]:
     """
     Returns:
@@ -168,13 +168,10 @@ def traceaverage_and_smooth(
     V: np.ndarray,
     Electrode_Voltage: float,
     SmoothFactorIV: int,
-    voltage_shift: bool = False,
+    voltage_shift: float = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-    if voltage_shift:
-        Vavg = np.mean(V, axis=1) - Electrode_Voltage
-    else:
-        Vavg = np.mean(V, axis=1)
+    Vavg = np.mean(V, axis=1) - voltage_shift
     Iavg = np.mean(I, axis=1)
     Isth = smooth_1d(Iavg, SmoothFactorIV)
     return Isth, Iavg, Vavg
