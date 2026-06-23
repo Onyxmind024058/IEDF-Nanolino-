@@ -33,7 +33,7 @@ from Python_RFEA_Analysis_fcn import (
 # ============================================================
 # App / GitHub release settings
 # ============================================================
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 GITHUB_OWNER = "Onyxmind024058"
 GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
@@ -850,7 +850,7 @@ class MainWindow(QMainWindow):
         SmoothFactordIdV = int(self.smooth_didv.value())
         method = self.smooth_method.currentText()
 
-        transmission = float(self.transmission_wid.value())
+        transmission = float(self.transmission_wid.value())/100
         nbholes = float(self.nbholes_wid.value())
         radius_hole = float(self.radholes_wid.value())*1e-6
         area = np.pi*(radius_hole**2)*nbholes
