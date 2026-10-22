@@ -33,12 +33,12 @@
       data[id] = el.type === "checkbox" ? el.checked : el.value;
     }
     data.manualRanges = state.manualRanges;
-    store.set("rfea-params", JSON.stringify(data));
+    store.set("rfea-params-v2", JSON.stringify(data));
   }
 
   function restoreForm() {
     let data = null;
-    try { data = JSON.parse(store.get("rfea-params") || "null"); } catch (e) { data = null; }
+    try { data = JSON.parse(store.get("rfea-params-v2") || "null"); } catch (e) { data = null; }
     if (!data) return;
     for (const id of PARAM_IDS) {
       if (!(id in data)) continue;
