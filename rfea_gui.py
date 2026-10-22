@@ -13,10 +13,11 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtGui import QIcon, QAction, QActionGroup, QPalette, QColor
 
 import numpy as np
+import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -37,6 +38,70 @@ APP_VERSION = "1.1.4"
 GITHUB_OWNER = "Onyxmind024058"
 GITHUB_REPO = "IEDF-Nanolino-"
 PREFERRED_ASSET_EXTENSIONS = [".exe", ".msi", ".zip"]
+
+
+# ============================================================
+# Universität Basel theme (themes/basel-light.qss, themes/basel-dark.qss)
+# ============================================================
+THEME_FILES = {"light": "themes/basel-light.qss", "dark": "themes/basel-dark.qss"}
+
+# Plot colours matching each stylesheet
+PLOT_THEMES = {
+    "light": {
+        "bg": "#FFFFFF", "text": "#2D373C", "text_lo": "#666666", "grid": "#D8E2E0",
+        "raw": "#A5D7D2", "smooth": "#2D373C", "iedf": "#D20537", "span": "#A5D7D2",
+    },
+    "dark": {
+        "bg": "#262D31", "text": "#F2F5F4", "text_lo": "#A9B4B2", "grid": "#3C474B",
+        "raw": "#A5D7D2", "smooth": "#F2F5F4", "iedf": "#E24D6E", "span": "#A5D7D2",
+    },
+}
+
+
+def plot_theme(name: str) -> dict:
+    return PLOT_THEMES.get(name, PLOT_THEMES["light"])
+
+
+# The theme files only grey out disabled line edits and combo boxes; the
+# smoothing-parameter spin boxes are disabled per method, so cover them too.
+QSS_EXTRA = {
+    "light": "QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #F4F6F5; color: #999999; }",
+    "dark": "QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #20262A; color: #5B6669; }",
+}
+
+
+def apply_basel_theme(app: QApplication, name: str) -> None:
+    name = name if name in THEME_FILES else "light"
+    app.setStyle("Fusion")
+    try:
+        with open(resource_path(THEME_FILES[name]), encoding="utf-8") as f:
+            app.setStyleSheet(f.read() + "\n" + QSS_EXTRA[name])
+    except OSError:
+        app.setStyleSheet("")
+
+    c = plot_theme(name)
+    # Matplotlib picks light or dark toolbar icons from the palette's window colour
+    palette = app.palette()
+    palette.setColor(QPalette.Window, QColor(c["bg"]))
+    palette.setColor(QPalette.WindowText, QColor(c["text"]))
+    app.setPalette(palette)
+
+    matplotlib.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Helvetica Neue", "Arial", "DejaVu Sans"],
+        "text.color": c["text"],
+        "axes.labelcolor": c["text"],
+        "axes.edgecolor": c["text"],
+        "axes.titleweight": "bold",
+        "axes.titlelocation": "left",
+        "xtick.color": c["text"],
+        "ytick.color": c["text"],
+        "grid.color": c["grid"],
+        "legend.frameon": False,
+        "figure.facecolor": c["bg"],
+        "axes.facecolor": c["bg"],
+        "savefig.facecolor": c["bg"],
+    })
 
 
 def resource_path(rel_path: str) -> str:
@@ -103,6 +168,7 @@ def choose_best_asset(release: dict) -> str | None:
 def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(resource_path("icon.ico")))
+    apply_basel_theme(app, str(QSettings("Universität Basel", "RFEA Analyzer").value("theme", "light")))
     w = MainWindow()
     w.resize(1200, 700)
     w.show()
@@ -130,10 +196,11 @@ class ManualSmoothingDialog(QDialog):
     Each range is defined by [xmin, xmax, window].
     """
 
-    def __init__(self, Vavg, Iavg, existing_ranges=None, parent=None):
+    def __init__(self, Vavg, Iavg, existing_ranges=None, parent=None, colors=None):
         super().__init__(parent)
         self.setWindowTitle("Manual smoothing")
         self.resize(1000, 700)
+        self.colors = colors or plot_theme("light")
 
         self.Vavg = np.asarray(Vavg, dtype=float).ravel()
         self.Iavg = np.asarray(Iavg, dtype=float).ravel()
@@ -167,6 +234,9 @@ class ManualSmoothingDialog(QDialog):
         self.btn_clear = QPushButton("Clear all")
         self.btn_apply = QPushButton("OK")
         self.btn_cancel = QPushButton("Cancel")
+        self.btn_delete.setProperty("destructive", True)
+        self.btn_clear.setProperty("destructive", True)
+        self.btn_apply.setDefault(True)
 
         btn_row.addWidget(self.btn_delete)
         btn_row.addWidget(self.btn_clear)
@@ -189,7 +259,7 @@ class ManualSmoothingDialog(QDialog):
             useblit=True,
             interactive=False,
             drag_from_anywhere=False,
-            props=dict(alpha=0.25, facecolor="tab:blue"),
+            props=dict(alpha=0.5, facecolor=self.colors["span"]),
         )
 
         self.populate_table()
@@ -275,7 +345,8 @@ class ManualSmoothingDialog(QDialog):
         ax = self.canvas.ax
         ax.clear()
 
-        ax.plot(self.Vavg, self.Iavg, linewidth=2)
+        c = self.colors
+        ax.plot(self.Vavg, self.Iavg, color=c["smooth"], linewidth=2)
         ax.set_xlabel("Energy (eV)")
         ax.set_ylabel("Current (A)")
         ax.set_title("Manual smoothing range selection")
@@ -286,8 +357,9 @@ class ManualSmoothingDialog(QDialog):
         for idx, r in enumerate(self.ranges):
             xmin = float(r["xmin"])
             xmax = float(r["xmax"])
-            alpha = 0.35 if idx == selected_row else 0.18
-            ax.axvspan(xmin, xmax, alpha=alpha)
+            selected = idx == selected_row
+            ax.axvspan(xmin, xmax, color=c["span"], alpha=0.8 if selected else 0.4,
+                       ec=c["iedf"] if selected else "none")
             xc = 0.5 * (xmin + xmax)
             ymin, ymax = ax.get_ylim()
             ytext = ymin + 0.9 * (ymax - ymin)
@@ -298,7 +370,8 @@ class ManualSmoothingDialog(QDialog):
                 ha="center",
                 va="center",
                 fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.2", alpha=0.35),
+                color=c["text"],
+                bbox=dict(boxstyle="round,pad=0.2", fc=c["bg"], ec=c["span"]),
             )
 
         self.canvas.draw_idle()
@@ -336,6 +409,11 @@ class MainWindow(QMainWindow):
             "dIdE": None,
         }
 
+        self.settings = QSettings("Universität Basel", "RFEA Analyzer")
+        self.theme = str(self.settings.value("theme", "light"))
+        if self.theme not in THEME_FILES:
+            self.theme = "light"
+
         root = QWidget()
         self.setCentralWidget(root)
         main_layout = QHBoxLayout(root)
@@ -348,6 +426,10 @@ class MainWindow(QMainWindow):
         # ---------------- Left panel ----------------
         self.left_panel = QWidget()
         controls = QVBoxLayout(self.left_panel)
+
+        heading = QLabel("RFEA Analyzer")
+        heading.setProperty("heading", True)
+        controls.addWidget(heading)
 
         file_box = QGroupBox("File")
         fb = QVBoxLayout(file_box)
@@ -485,12 +567,16 @@ class MainWindow(QMainWindow):
         self.lbl_manual_summary.setWordWrap(True)
         controls.addWidget(self.lbl_manual_summary)
 
+        results_box = QGroupBox("Results")
+        rb = QVBoxLayout(results_box)
         self.lbl_stats = QLabel("")
         self.lbl_stats.setAlignment(Qt.AlignTop)
         self.lbl_stats.setWordWrap(True)
-        controls.addWidget(self.lbl_stats, 1)
+        rb.addWidget(self.lbl_stats)
+        controls.addWidget(results_box, 1)
 
         self.btn_run = QPushButton("Run / Update")
+        self.btn_run.setDefault(True)
         controls.addWidget(self.btn_run)
 
         self.btn_export_csv = QPushButton("Export data (CSV)…")
@@ -513,6 +599,7 @@ class MainWindow(QMainWindow):
 
         self.canvas = MplCanvas(self)
         self.toolbar = NavigationToolbar(self.canvas, self)
+        self.plot_layout = plot_layout
 
         plot_layout.addWidget(self.toolbar)
         plot_layout.addWidget(self.canvas)
@@ -529,6 +616,36 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([330, 870])
+
+        # ---------------- Menu bar / status bar ----------------
+        menu_file = self.menuBar().addMenu("File")
+        menu_file.addAction("Open CSV…", self.open_file)
+        menu_file.addSeparator()
+        menu_file.addAction("Export data (CSV)…", self.export_csv)
+        menu_file.addAction("Export plot (PNG/SVG)…", self.export_plot)
+        menu_file.addSeparator()
+        menu_file.addAction("Quit", self.close)
+
+        menu_view = self.menuBar().addMenu("View")
+        theme_group = QActionGroup(self)
+        self.theme_actions = {}
+        for key, label in (("light", "Light theme"), ("dark", "Dark theme")):
+            act = QAction(label, self, checkable=True)
+            act.setChecked(key == self.theme)
+            act.triggered.connect(lambda _checked, k=key: self.set_theme(k))
+            theme_group.addAction(act)
+            menu_view.addAction(act)
+            self.theme_actions[key] = act
+
+        menu_help = self.menuBar().addMenu("Help")
+        menu_help.addAction("Check for updates", lambda: self.check_for_updates(silent=False))
+        menu_help.addAction("About", self.show_about)
+
+        self.lbl_theme = QLabel()
+        self.statusBar().addPermanentWidget(self.lbl_theme)
+        self.statusBar().showMessage("Ready — open a CSV file to start")
+        self._update_theme_label()
+        self._style_axes()
 
         self.btn_open.clicked.connect(self.open_file)
         self.btn_run.clicked.connect(self.run)
@@ -570,6 +687,50 @@ class MainWindow(QMainWindow):
         self.update_manual_summary()
 
         QTimer.singleShot(1200, lambda: self.check_for_updates(silent=True))
+
+    def set_theme(self, name: str):
+        if name not in THEME_FILES:
+            return
+        self.theme = name
+        self.settings.setValue("theme", name)
+        apply_basel_theme(QApplication.instance(), name)
+        self.theme_actions[name].setChecked(True)
+        self._update_theme_label()
+
+        # Rebuild the toolbar so its icons follow the new background
+        new_toolbar = NavigationToolbar(self.canvas, self)
+        self.plot_layout.replaceWidget(self.toolbar, new_toolbar)
+        self.toolbar.deleteLater()
+        self.toolbar = new_toolbar
+
+        if self.last["Vavg"] is not None:
+            self.run()
+        else:
+            self._style_axes()
+            self.canvas.draw_idle()
+
+    def _update_theme_label(self):
+        self.lbl_theme.setText(f"Basel Mint theme · {self.theme.capitalize()}")
+
+    def _style_axes(self):
+        c = plot_theme(self.theme)
+        ax1, ax2 = self.canvas.ax1, self.canvas.ax2
+        self.canvas.figure.set_facecolor(c["bg"])
+        ax1.set_facecolor(c["bg"])
+        for spine in ("left", "bottom"):
+            ax1.spines[spine].set_color(c["text"])
+        ax1.spines["top"].set_visible(False)
+        ax2.spines["top"].set_visible(False)
+        ax1.spines["right"].set_visible(False)
+        ax2.spines["left"].set_visible(False)
+        ax2.spines["bottom"].set_visible(False)
+        ax2.spines["right"].set_color(c["iedf"])
+        ax1.tick_params(colors=c["text"])
+        ax2.tick_params(axis="y", colors=c["iedf"])
+        ax1.xaxis.label.set_color(c["text"])
+        ax1.yaxis.label.set_color(c["text"])
+        ax2.yaxis.label.set_color(c["iedf"])
+        ax1.title.set_color(c["text"])
 
     def sync_param_visibility(self):
         method = self.smooth_method.currentText()
@@ -636,6 +797,7 @@ class MainWindow(QMainWindow):
             Iavg=Iavg,
             existing_ranges=self.manual_ranges,
             parent=self,
+            colors=plot_theme(self.theme),
         )
         if dlg.exec() == QDialog.Accepted:
             self.manual_ranges = dlg.get_ranges()
@@ -650,7 +812,7 @@ class MainWindow(QMainWindow):
         version = APP_VERSION
 
         text = (
-            f"<b>{name}</b> <span style='color:gray'>(v{version})</span><br>"
+            f"<b>{name}</b> <span style='color:{plot_theme(self.theme)['text_lo']}'>(v{version})</span><br>"
             f"{company}<br>"
             f"<a href='mailto:{email}'>{email}</a>"
         )
@@ -960,21 +1122,18 @@ class MainWindow(QMainWindow):
         if n_e > 10:
             E, dI = E[:-10], dI[:-10]
 
-        ax1.plot(V, I, color="black", linewidth=2.5, label="I")
-        ax1.plot(V, Is, color="green", linewidth=2.5, label="Ismooth")
+        c = plot_theme(self.theme)
+        ax1.plot(V, I, color=c["raw"], linewidth=5, label="I")
+        ax1.plot(V, Is, color=c["smooth"], linewidth=2, label="Ismooth")
         ax1.set_xlabel("Energy (eV)")
-        ax1.set_ylabel("Current (A)", color="black")
-        ax1.tick_params(axis="y", colors="black")
-        ax1.spines["left"].set_color("black")
+        ax1.set_ylabel("Current (A)")
         ax1.grid(True)
-        ax1.legend(loc="upper left")
+        ax1.legend(loc="upper left", bbox_to_anchor=(0.0, 0.92), labelcolor=c["text"])
 
-        ax2.plot(E, dI, color="red", linewidth=2.5)
-        ax2.set_ylabel("IEDF (a.u.)", color="red")
+        ax2.plot(E, dI, color=c["iedf"], linewidth=2.5)
+        ax2.set_ylabel("IEDF (a.u.)")
         ax2.yaxis.set_label_position("right")
         ax2.yaxis.tick_right()
-        ax2.tick_params(axis="y", colors="red")
-        ax2.spines["right"].set_color("red")
 
         if len(dI) > 0 and np.any(np.isfinite(dI)):
             ymax = np.nanmax(dI) * 1.5
@@ -985,7 +1144,10 @@ class MainWindow(QMainWindow):
         ax2.set_ylim(0, ymax)
 
         ax1.set_title("I–V curve and IEDF")
+        self._style_axes()
+        self._hover_text.set_color(c["text"])
         self.canvas.draw()
+        self.statusBar().showMessage(f"Ready — {self.csv_path.name} analysed")
 
 
 if __name__ == "__main__":

@@ -311,7 +311,7 @@ def iedf(
     dIdE = dIdE * corr_fac
     flux = S * corr_fac
 
-    v_Bohm = np.sqrt(Te / (Mi * 1.66e-27))
+    v_Bohm = np.sqrt(Te * 1.602e-19 / (Mi * 1.66e-27))  # Te in eV -> J
     ni = flux / (0.6 * v_Bohm) if v_Bohm != 0 else np.nan
 
     Eavg = (np.sum(E * dIdE) / np.sum(dIdE)) if np.sum(dIdE) != 0 else np.nan
@@ -447,10 +447,10 @@ def plotgraphIEDF(V, Iavg, Isth, E, dIdE):
 def tau_ratio_NF(Mi: float, f_rf: float, Vp: float, ni: float, Te: float = 3.0, alpha: float = 3.0) -> float:
     e = 1.602e-19
     eps0 = 8.85e-12
-    u = 1.61e-27
+    u = 1.66e-27
 
     Lde = np.sqrt(eps0 * Te / e / ni)
     s = alpha * Lde * (Vp / Te) ** (3 / 4)
-    tau_i = 3 * s * np.sqrt((Mi * u) / 2 * e * Vp)
+    tau_i = 3 * s * np.sqrt((Mi * u) / (2 * e * Vp))
     tau_rf = 1.0 / f_rf
     return float(tau_i / tau_rf)

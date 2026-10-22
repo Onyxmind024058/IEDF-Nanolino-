@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('themes/*.qss', 'themes')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

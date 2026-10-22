@@ -46,6 +46,8 @@ The application window is divided into three main areas:
 3. **Results Panel**
     - Numerical results from the analysis
 
+The interface uses the University of Basel colours (`themes/basel-light.qss`, `themes/basel-dark.qss`). Switch between them with **View → Light theme / Dark theme**; the choice is remembered.
+
 ---
 
 ## 4. Loading Data
