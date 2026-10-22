@@ -1,7 +1,7 @@
 """Generate test CSVs and Python reference results for web/tests/compare.mjs.
 
 Run from the repository root:
-    python web/tests/make_reference.py web/tests/data
+    python web/tests/make_reference.py web/tests/data [real_export.csv ...]
 """
 import json
 import sys
@@ -14,6 +14,8 @@ from Python_RFEA_Analysis_fcn import full_analysis  # noqa: E402
 
 out = Path(sys.argv[1] if len(sys.argv) > 1 else "web/tests/data")
 out.mkdir(parents=True, exist_ok=True)
+# Optional real measurement files to include: make_reference.py <outdir> file1.csv ...
+extra = [Path(a) for a in sys.argv[2:]]
 
 
 def write_csv(path, V, traces, sep):
@@ -42,6 +44,10 @@ write_csv(out / "bimodal_comma.csv", V,
           [sigmoid_step(V, 30, 2.5, 4e-7) + sigmoid_step(V, 85, 4, 6e-7) + 2e-9 * rng.standard_normal(V.size)
            for _ in range(3)], ",")
 cases["bimodal_comma.csv"] = {}
+
+for f in extra:
+    (out / f.name).write_bytes(f.read_bytes())
+    cases[f.name] = {}
 
 PARAMS = [
     dict(name="recursive", smoothfunctionIV="Recursive", smoothIVparam=10),
