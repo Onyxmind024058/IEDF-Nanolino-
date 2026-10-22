@@ -161,6 +161,7 @@ input[type="checkbox"]:hover { border-color: var(--mint-deep); }
   font: 13px "Helvetica Neue", Arial, sans-serif;
   cursor: pointer;
 }
+a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .btn:hover { border-color: var(--mint-deep); background: var(--mint-soft); }
 .btn:active { background: var(--mint); color: var(--on-mint); }
 .btn:disabled { color: var(--disabled); background: var(--backdrop); border-color: var(--border); cursor: default; }
