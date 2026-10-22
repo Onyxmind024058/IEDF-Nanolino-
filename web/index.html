@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFEA Analyzer</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="css/basel.css">
+<script>
+  // Apply the saved (or system) theme before first paint
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("rfea-theme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") {
+      t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+
+<header class="appbar">
+  <div class="brand">
+    <h1>RFEA Analyzer</h1>
+    <span class="sub">Universität Basel · Ion energy distribution from RFEA measurements</span>
+  </div>
+  <div class="appbar-actions">
+    <div class="seg" role="group" aria-label="Theme">
+      <button type="button" data-theme-btn="light">Light</button>
+      <button type="button" data-theme-btn="dark">Dark</button>
+    </div>
+    <button type="button" id="btn-about" class="btn">About</button>
+  </div>
+</header>
+
+<div class="layout" id="layout">
+  <aside class="panel" id="panel">
+    <fieldset class="group">
+      <legend>File</legend>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".csv,text/csv">
+        <span class="drop-title">Open CSV…</span>
+        <span class="drop-hint">or drop a Semion export here</span>
+      </label>
+      <p class="muted" id="file-name">No file selected. The file is read in your browser and never uploaded.</p>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Grids &amp; gas</legend>
+      <div class="grid2">
+        <label><span class="lbl">Grid transmission (%)</span><input type="number" id="transmission" value="53.9" min="0" max="100" step="0.1"></label>
+        <label><span class="lbl">Number of holes</span><input type="number" id="nholes" value="37" min="1" max="100" step="1"></label>
+        <label><span class="lbl">Hole radius (µm)</span><input type="number" id="radius" value="40" min="0" max="1000" step="0.001"></label>
+        <label><span class="lbl">Pressure (Pa)</span><input type="number" id="pressure" value="1" min="0" step="0.0001"></label>
+      </div>
+      <label><span class="lbl">Gas (cross-section)</span>
+        <select id="gas">
+          <option>Ar Impedans</option>
+          <option>Ar kinetic</option>
+          <option>He Impedans</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Smoothing</legend>
+      <div class="grid2">
+        <label><span class="lbl">I–V method</span>
+          <select id="method">
+            <option>Recursive</option>
+            <option>Mavg</option>
+            <option>SG</option>
+            <option>Manual</option>
+          </select>
+        </label>
+        <label><span class="lbl">dI/dE smoothing</span><input type="number" id="smooth-didv" value="50" min="1" max="2000" step="1"></label>
+        <label data-for="Recursive"><span class="lbl">Recursive window</span><input type="number" id="rec-window" value="10" min="1" max="2000" step="1"></label>
+        <label data-for="Mavg"><span class="lbl">Mavg window</span><input type="number" id="mavg-window" value="20" min="1" max="2000" step="1"></label>
+        <label data-for="SG"><span class="lbl">SG polyorder</span><input type="number" id="sg-poly" value="1" min="0" max="10" step="1"></label>
+        <label data-for="SG"><span class="lbl">SG window (odd)</span><input type="number" id="sg-window" value="13" min="3" max="2001" step="2"></label>
+      </div>
+      <div data-for="Manual" class="manual-row">
+        <button type="button" class="btn" id="btn-manual">Manual smoothing…</button>
+        <span class="muted" id="manual-summary">No ranges</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Plasma &amp; sheath</legend>
+      <div class="grid2">
+        <label><span class="lbl">V<sub>p</sub> (V)</span><input type="number" id="vp" value="20" min="0" step="0.1"></label>
+        <label><span class="lbl">M<sub>i</sub> (u)</span><input type="number" id="mi" value="40" min="0.1" max="500" step="0.1"></label>
+        <label><span class="lbl">f<sub>rf</sub> (MHz)</span><input type="number" id="frf" value="13.56" min="0" step="0.01"></label>
+        <label><span class="lbl">T<sub>e</sub> (eV)</span><input type="number" id="te" value="3" min="0.01" step="0.1"></label>
+        <label><span class="lbl">α (sheath)</span><input type="number" id="alpha" value="3" min="0.01" step="0.1"></label>
+        <label><span class="lbl">Voltage shift (V)</span>
+          <span class="inline">
+            <input type="checkbox" id="shift-on" aria-label="Apply voltage shift">
+            <input type="number" id="shift" value="0" step="0.1" disabled>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset class="group results">
+      <legend>Results</legend>
+      <dl id="results">
+        <dt>E<sub>avg</sub></dt><dd data-k="Eavg">—</dd>
+        <dt>E<sub>peak</sub></dt><dd data-k="Epeak">—</dd>
+        <dt>Flux</dt><dd data-k="flux">—</dd>
+        <dt>n<sub>i</sub></dt><dd data-k="ni">—</dd>
+        <dt>τ<sub>i</sub>/τ<sub>rf</sub></dt><dd data-k="tauRatio">—</dd>
+        <dt>Electrode V</dt><dd data-k="electrodeVoltage">—</dd>
+        <dt>Ion flux (file)</dt><dd data-k="ionFlux">—</dd>
+      </dl>
+    </fieldset>
+
+    <div class="actions">
+      <button type="button" class="btn" id="btn-export-csv" disabled>Export CSV</button>
+      <button type="button" class="btn" id="btn-export-png" disabled>Export PNG</button>
+      <button type="button" class="btn" id="btn-export-svg" disabled>Export SVG</button>
+    </div>
+  </aside>
+
+  <main class="plot-area">
+    <div class="plot-bar">
+      <button type="button" class="btn ghost" id="btn-panel" aria-expanded="true">Hide panel</button>
+      <span class="muted" id="status">Open a CSV file to start.</span>
+    </div>
+    <div id="plot" class="plot"></div>
+  </main>
+</div>
+
+<footer class="statusbar">
+  <span id="status-left">Ready</span>
+  <span id="status-right">Basel Mint theme</span>
+</footer>
+
+<dialog id="manual-dialog" class="modal">
+  <form method="dialog" class="modal-body">
+    <h2>Manual smoothing</h2>
+    <p class="muted">Drag across the plot to add a range. Each range gets its own moving-average window. Edit values in the table; select a row to highlight it.</p>
+    <div id="manual-plot" class="manual-plot"></div>
+    <table class="ranges">
+      <thead><tr><th>#</th><th>V min</th><th>V max</th><th>Window</th><th></th></tr></thead>
+      <tbody id="ranges-body"></tbody>
+    </table>
+    <div class="modal-actions">
+      <button type="button" class="btn destructive" id="btn-ranges-clear">Clear all</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" value="cancel" id="btn-ranges-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="btn-ranges-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="about-dialog" class="modal small">
+  <form method="dialog" class="modal-body">
+    <h2>RFEA Analyzer</h2>
+    <p>Web version of the RFEA analysis by P. Hiret, Universität Basel.<br>
+       <a href="mailto:paul.hiret@unibas.ch">paul.hiret@unibas.ch</a></p>
+    <p class="muted">Everything runs in your browser; files are not uploaded.
+       Licensed CC BY-NC 4.0. Plots by plotly.js (MIT).</p>
+    <div class="modal-actions"><span class="spacer"></span><button class="btn primary">Close</button></div>
+  </form>
+</dialog>
+
+<script src="vendor/plotly-2.35.2.min.js"></script>
+<script src="js/rfea-analysis.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

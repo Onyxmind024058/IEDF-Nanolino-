@@ -22,6 +22,8 @@ This manual has been generated using ChatGPT 5.2
 
 ---
 
+> **Web version:** the same analysis also runs in the browser, with nothing to install. See [`web/README.md`](web/README.md).
+
 ## 2. System Requirements
 
 - **Operating system:** Windows 10 / 11
