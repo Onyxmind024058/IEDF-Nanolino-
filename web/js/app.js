@@ -313,7 +313,21 @@
   });
 
   // ---------------- Exports ----------------
-  function download(name, blob) {
+  // Inside claude.ai the page cannot start downloads itself; the viewer's
+  // "downloads" capability asks the user to confirm the save instead.
+  async function download(name, blob) {
+    if (window.claude && typeof window.claude.use === "function") {
+      const downloads = await window.claude.use("downloads");
+      if (downloads) {
+        try {
+          await downloads.save({ filename: name, data: blob });
+          setStatus(`Saved ${name}`);
+        } catch (e) {
+          if (e && e.code !== "declined") setStatus(`Could not save ${name}: ${e.message || e.code}`, true);
+        }
+        return;
+      }
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -341,16 +355,30 @@
     return (state.fileName || "rfea").replace(/\.[^.]+$/, "");
   }
 
-  function exportImage(format) {
+  async function exportImage(format) {
     if (!state.result) return;
     const { width, height } = plotEl.getBoundingClientRect();
-    Plotly.downloadImage(plotEl, {
+    const dataUrl = await Plotly.toImage(plotEl, {
       format,
-      filename: baseName() + "_rfea_plot",
       width: Math.round(width),
       height: Math.round(height),
       scale: format === "png" ? 3 : 1,
     });
+    await download(`${baseName()}_rfea_plot.${format}`, dataUrlToBlob(dataUrl));
+  }
+
+  function dataUrlToBlob(url) {
+    const comma = url.indexOf(",");
+    const meta = url.slice(5, comma);
+    const payload = url.slice(comma + 1);
+    const type = meta.split(";")[0];
+    if (meta.includes(";base64")) {
+      const bin = atob(payload);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type });
+    }
+    return new Blob([decodeURIComponent(payload)], { type });
   }
 
   $("btn-export-csv").addEventListener("click", exportCsv);
