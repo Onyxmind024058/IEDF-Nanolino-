@@ -548,6 +548,38 @@
 
   $("btn-about").addEventListener("click", () => $("about-dialog").showModal());
 
+  // ---------------- Installable app (PWA) ----------------
+  // Offline cache; service workers only run over http(s), not from file://
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* still works online */ });
+  }
+
+  // Chrome/Edge: show our own Install button when the browser offers installation
+  let installPrompt = null;
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    $("btn-install").hidden = false;
+  });
+  $("btn-install").addEventListener("click", async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    $("btn-install").hidden = true;
+  });
+  window.addEventListener("appinstalled", () => {
+    $("btn-install").hidden = true;
+    setStatus("RFEA Analyzer installed");
+  });
+
+  // Installed app opened with a CSV ("Open with" / double-click on desktop)
+  if ("launchQueue" in window) {
+    window.launchQueue.setConsumer(async (params) => {
+      if (params.files && params.files.length) loadFile(await params.files[0].getFile());
+    });
+  }
+
   // ---------------- Wiring ----------------
   for (const id of PARAM_IDS) {
     const el = $(id);
