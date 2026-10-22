@@ -1,5 +1,9 @@
 # IEDF-Nanolino-
 
+### ▶ Open the RFEA Analyzer: **[onyxmind024058.github.io/IEDF-Nanolino-/web/](https://onyxmind024058.github.io/IEDF-Nanolino-/web/)**
+
+Runs in the browser, nothing to install. CSV files are read on your computer and never uploaded.
+
 # **RFEA Analyzer – User Manual**
 
 ## 1. Introduction
