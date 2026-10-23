@@ -37,7 +37,7 @@ const server = http.createServer((req, res) => {
   const man = await cdp.send("Page.getAppManifest");
   console.log("Manifest parse errors:", man.errors.length ? JSON.stringify(man.errors) : "none");
 
-  const cached = await page.evaluate(async () => (await (await caches.open("rfea-v1")).keys()).length);
+  const cached = await page.evaluate(async () => (await (await caches.open("rfea-v2")).keys()).length);
   console.log("Files cached:", cached);
 
   await context.setOffline(true);

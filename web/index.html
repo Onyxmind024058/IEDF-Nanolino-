@@ -75,15 +75,15 @@
       <div class="grid2">
         <label><span class="lbl">I–V method</span>
           <select id="method">
-            <option>Recursive</option>
+            <option value="Recursive">Recursive</option>
             <option>Mavg</option>
             <option>SG</option>
             <option>Manual</option>
           </select>
         </label>
-        <label><span class="lbl">dI/dE smoothing</span><input type="number" id="smooth-didv" value="50" min="1" max="2000" step="1"></label>
-        <label data-for="Recursive"><span class="lbl">Recursive window</span><input type="number" id="rec-window" value="10" min="1" max="2000" step="1"></label>
-        <label data-for="Mavg"><span class="lbl">Mavg window</span><input type="number" id="mavg-window" value="20" min="1" max="2000" step="1"></label>
+        <label><span class="lbl">dI/dE smoothing (eV)</span><input type="number" id="smooth-didv" value="1" min="0" max="50" step="0.1"></label>
+        <label data-for="Recursive"><span class="lbl">Peak protection ± (eV)</span><input type="number" id="rec-window" value="10" min="0" max="200" step="0.5"></label>
+        <label data-for="Mavg"><span class="lbl">Mavg window</span><input type="number" id="mavg-window" value="5" min="1" max="2000" step="1"></label>
         <label data-for="SG"><span class="lbl">SG polyorder</span><input type="number" id="sg-poly" value="1" min="0" max="10" step="1"></label>
         <label data-for="SG"><span class="lbl">SG window (odd)</span><input type="number" id="sg-window" value="13" min="3" max="2001" step="2"></label>
       </div>

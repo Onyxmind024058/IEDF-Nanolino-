@@ -366,6 +366,118 @@ function smoothIVSinglePeak(I, V, window = 10, maxIter = 1000) {
   throw new Error("Recursive smoothing did not converge (peak keeps moving). Try another smoothing method.");
 }
 
+// ------------------------------------------------------------------
+// Peak-preserving smoothing (the improved "Recursive" method)
+//
+// All widths are in eV, so the same settings work for any voltage step.
+// Every significant IEDF peak gets a protected zone that is left unsmoothed;
+// outside it a moving average widens with the distance to the zone but never
+// reaches into it, so there are no kinks at the zone edges. Peaks are
+// re-detected on the result until they stop moving.
+// ------------------------------------------------------------------
+
+function medianStep(V) {
+  const d = [];
+  for (let i = 1; i < V.length; i++) d.push(Math.abs(V[i] - V[i - 1]));
+  d.sort((a, b) => a - b);
+  return d[d.length >> 1] || 1;
+}
+
+// Width in eV -> odd number of samples (even moving averages shift the curve)
+function oddWindow(widthEV, dv) {
+  const n = Math.max(1, Math.round(widthEV / dv));
+  return n % 2 ? n : n + 1;
+}
+
+function slopes(I, V) {
+  const d = new Float64Array(I.length - 1);
+  for (let i = 1; i < I.length; i++) d[i - 1] = (I[i] - I[i - 1]) / (V[i] - V[i - 1]);
+  return d;
+}
+
+// Moving average with a half-width h[i] (samples) per point; nearest-value padding at the ends
+function variableMovingAverage(y, h) {
+  const n = y.length;
+  const P = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) P[i + 1] = P[i] + y[i];
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = Math.max(0, Math.round(h[i]));
+    let a = i - k;
+    let b = i + k;
+    let s = 0;
+    if (a < 0) { s += -a * y[0]; a = 0; }
+    if (b > n - 1) { s += (b - n + 1) * y[n - 1]; b = n - 1; }
+    out[i] = (s + P[b + 1] - P[a]) / (2 * k + 1);
+  }
+  return out;
+}
+
+// IEDF peaks with at least relProm x the largest prominence, strongest first
+function detectIedfPeaks(I, V, detectEV, relProm) {
+  const w = oddWindow(detectEV, medianStep(V));
+  const d = smooth1d(slopes(I, V), w);
+  const Vm = Array.from({ length: d.length }, (_, i) => 0.5 * (V[i] + V[i + 1]));
+  const lo = Math.min(w, d.length >> 2);
+  const hi = Math.max(lo + 1, d.length - lo); // skip edges distorted by the smoothing
+  const yy = d.slice(lo, hi);
+  const { peaks, prominences } = findPeaks(yy, 0);
+  if (!peaks.length) return [Vm[lo + nanargmax(yy)]];
+  const top = Math.max(...prominences);
+  return peaks
+    .map((p, k) => [p, prominences[k]])
+    .filter(([, pr]) => pr >= relProm * top)
+    .sort((a, b) => b[1] - a[1])
+    .map(([p]) => Vm[lo + p]);
+}
+
+function peakPreservingSmooth(I, V, opts = {}) {
+  const { protectEV = 10, maxEV = 5, growth = 0.5, detectEV = 2, relProm = 0.2, maxIter = 20 } = opts;
+  const dv = medianStep(V);
+  let peaks = detectIedfPeaks(I, V, detectEV, relProm);
+  let Ismooth = Float64Array.from(I);
+  let iterations = 0;
+  while (iterations < maxIter) {
+    iterations++;
+    const h = V.map((v) => {
+      let dist = Infinity;
+      for (const p of peaks) dist = Math.min(dist, Math.abs(v - p));
+      dist -= protectEV;
+      return dist <= 0 ? 0 : Math.min(maxEV, growth * dist) / dv;
+    });
+    Ismooth = variableMovingAverage(I, h);
+    const next = detectIedfPeaks(Ismooth, V, detectEV, relProm);
+    const moved = next.length !== peaks.length || next.some((p, k) => Math.abs(p - peaks[k]) >= 0.1);
+    peaks = next;
+    if (!moved) break;
+  }
+  return { Ismooth, peaks, iterations, protectEV };
+}
+
+// Peak energy from a least-squares parabola through the top of the highest peak
+// (all contiguous points above `frac` of the maximum); falls back to the maximum
+function peakEnergy(E, d, frac = 0.7) {
+  if (!d.length) return NaN;
+  const im = nanargmax(d);
+  let a = im;
+  let b = im;
+  while (a > 0 && d[a - 1] >= frac * d[im]) a--;
+  while (b < d.length - 1 && d[b + 1] >= frac * d[im]) b++;
+  if (b - a < 2) return E[im];
+  const n = b - a + 1;
+  let s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+  for (let k = a; k <= b; k++) {
+    const x = E[k] - E[im];
+    const y = d[k];
+    s1 += x; s2 += x * x; s3 += x ** 3; s4 += x ** 4;
+    t0 += y; t1 += x * y; t2 += x * x * y;
+  }
+  const c = solve([[s4, s3, s2], [s3, s2, s1], [s2, s1, n]], Float64Array.from([t2, t1, t0]));
+  if (!(c[0] < 0)) return E[im];
+  const xv = -c[1] / (2 * c[0]);
+  return xv >= E[a] - E[im] && xv <= E[b] - E[im] ? E[im] + xv : E[im];
+}
+
 function ionFluxPressureCorrection(pressure, fluxFactor, crossSection) {
   const fixCorr = 1.12e-3;
   const Ng = 3.25e22 * pressure * 0.0075;
@@ -390,21 +502,29 @@ function derivative(Ismooth, V, smoothFactordIdV) {
   return { dIdE: smooth1d(d, smoothFactordIdV), E: V.slice(1) };
 }
 
-// iedf: smoothing method -> IEDF, flux, density, mean and peak energy
+// iedf: smoothing method -> IEDF, flux, density, mean and peak energy.
+// p.pipeline === "legacy" reproduces Python_RFEA_Analysis_fcn.py exactly
+// (windows in points, slope placed at the upper voltage of each step).
 function iedf(I, V, p) {
   let Ismooth;
   let E;
   let dIdE;
   let Epeak;
+  let peaks = null;
   const method = p.smoothMethod;
+  const legacy = p.pipeline === "legacy";
 
-  if (method === "Recursive") {
+  if (legacy && method === "Recursive") {
     const r = smoothIVSinglePeak(I.slice(2), V.slice(2), p.smoothParam ?? 10);
     Ismooth = r.Ismooth;
     ({ dIdE, E } = derivative(Ismooth, r.V, p.smoothFactordIdV));
     Epeak = r.Epeak;
   } else {
-    if (method === "Mavg") {
+    if (method === "Recursive") {
+      const r = peakPreservingSmooth(I, V, { protectEV: p.smoothParam ?? 10 });
+      Ismooth = r.Ismooth;
+      peaks = r.peaks;
+    } else if (method === "Mavg") {
       Ismooth = smooth1d(I, p.smoothParam ?? 20);
     } else if (method === "SG") {
       let [polyorder, win] = p.smoothParam ?? [1, 13];
@@ -418,8 +538,15 @@ function iedf(I, V, p) {
     } else {
       throw new Error(`Unknown smoothing method: ${method}`);
     }
-    ({ dIdE, E } = derivative(Ismooth, V, p.smoothFactordIdV));
-    Epeak = dIdE.length ? E[nanargmax(dIdE)] : NaN;
+    if (legacy) {
+      ({ dIdE, E } = derivative(Ismooth, V, p.smoothFactordIdV));
+      Epeak = dIdE.length ? E[nanargmax(dIdE)] : NaN;
+    } else {
+      // Slope of each voltage step belongs to the middle of that step
+      dIdE = smooth1d(slopes(Ismooth, V), oddWindow(p.dIdESmoothEV ?? 1, medianStep(V)));
+      E = Float64Array.from({ length: V.length - 1 }, (_, i) => 0.5 * (V[i] + V[i + 1]));
+      Epeak = peakEnergy(E, dIdE);
+    }
   }
 
   const Ev = [];
@@ -447,7 +574,7 @@ function iedf(I, V, p) {
   }
   const Eavg = den !== 0 ? num / den : NaN;
 
-  return { Eavg, flux, dIdE, E, ni, Epeak, Ismooth };
+  return { Eavg, flux, dIdE, E, ni, Epeak, Ismooth, peaks };
 }
 
 // Grid geometry -> flux factor (same formula as the desktop GUI)
@@ -468,7 +595,9 @@ const CROSS_SECTIONS = {
 function fullAnalysis(text, p) {
   const { electrodeVoltage, ionFlux, table } = importFile(text);
   const traces = separateTraces(table);
-  const { Isth, Iavg, Vavg } = traceAverageAndSmooth(traces, 10, p.voltageShift ?? 0);
+  let { Isth, Iavg, Vavg } = traceAverageAndSmooth(traces, 10, p.voltageShift ?? 0);
+  // Light noise filter before any method: 10 points (legacy) or 1 eV
+  if (p.pipeline !== "legacy") Isth = smooth1d(Iavg, oddWindow(1, medianStep(Vavg)));
   const r = iedf(Isth, Vavg, p);
 
   let tauRatio = null;
@@ -486,5 +615,5 @@ function fullAnalysis(text, p) {
   };
 }
 
-globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis };
+globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis };
 })();

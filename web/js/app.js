@@ -33,12 +33,12 @@
       data[id] = el.type === "checkbox" ? el.checked : el.value;
     }
     data.manualRanges = state.manualRanges;
-    store.set("rfea-params-v2", JSON.stringify(data));
+    store.set("rfea-params-v3", JSON.stringify(data));
   }
 
   function restoreForm() {
     let data = null;
-    try { data = JSON.parse(store.get("rfea-params-v2") || "null"); } catch (e) { data = null; }
+    try { data = JSON.parse(store.get("rfea-params-v3") || "null"); } catch (e) { data = null; }
     if (!data) return;
     for (const id of PARAM_IDS) {
       if (!(id in data)) continue;
@@ -106,7 +106,7 @@
   function readParams() {
     const method = $("method").value;
     let smoothParam = null;
-    if (method === "Recursive") smoothParam = Math.trunc(num("rec-window"));
+    if (method === "Recursive") smoothParam = num("rec-window");
     else if (method === "Mavg") smoothParam = Math.trunc(num("mavg-window"));
     else if (method === "SG") {
       let win = Math.trunc(num("sg-window"));
@@ -116,7 +116,7 @@
 
     return {
       pressure: num("pressure"),
-      smoothFactordIdV: Math.trunc(num("smooth-didv")),
+      dIdESmoothEV: num("smooth-didv"),
       smoothMethod: method,
       smoothParam,
       Mi: num("mi"),
@@ -175,6 +175,7 @@
       return;
     }
     state.result = r;
+    state.params = params;
     renderResults(r);
     renderPlot();
     ["btn-export-csv", "btn-export-png", "btn-export-svg"].forEach((id) => ($(id).disabled = false));
@@ -257,6 +258,18 @@
     };
     layout.legend = { x: 0.01, y: 0.99, bgcolor: "rgba(0,0,0,0)", font: { color: c.text } };
     layout.hovermode = "x unified";
+    // Recursive: show the protected (unsmoothed) zone around each detected peak
+    if (r.peaks && state.params && state.params.smoothMethod === "Recursive") {
+      const w = state.params.smoothParam;
+      layout.shapes = r.peaks.map((p) => ({
+        type: "rect", xref: "x", yref: "paper", x0: p - w, x1: p + w, y0: 0, y1: 1,
+        fillcolor: c.mint, opacity: 0.18, line: { width: 0 }, layer: "below",
+      }));
+      layout.annotations = r.peaks.map((p) => ({
+        x: p, y: 1, xref: "x", yref: "paper", yanchor: "bottom", showarrow: false,
+        text: "protected", font: { size: 10, color: c.textLo },
+      }));
+    }
 
     Plotly.react(plotEl, [
       { x: V, y: Array.from(r.Iavg.slice(0, n)), name: "I", mode: "lines", line: { color: c.raw, width: 6 },

@@ -41,6 +41,14 @@ the last parameters are remembered in the browser.
 
 ## Differences from the desktop app
 
+- **Recursive smoothing is a new, peak-preserving algorithm** (see the main
+  README, section 5.4). Smoothing widths are in eV instead of data points, the
+  dI/dE smoothing default is 1 eV instead of 50 points, and slopes are placed at
+  the middle of each voltage step. This removes the failures on sparse sweeps
+  and a bias of about half a voltage step in E<sub>peak</sub> and E<sub>avg</sub>.
+  The exact Python algorithm is still in `js/rfea-analysis.js` as
+  `pipeline: "legacy"` and is what `tests/compare.mjs` checks against Python.
+
 - f_rf is entered in MHz instead of Hz.
 - The gas list's "He Impedans" entry works (in the desktop app it never matched
   and the analysis failed).
@@ -56,8 +64,9 @@ python web/tests/make_reference.py web/tests/data   # needs numpy, scipy, pandas
 node web/tests/compare.mjs web/tests/data           # compares every output array
 ```
 
-The JavaScript results match the Python ones to about 1e-12 for all smoothing
-methods. `web/tests/browser-check.cjs` drives the page in Chromium with
+With `pipeline: "legacy"` the JavaScript results match the Python ones to about
+1e-12 for all smoothing methods. `web/tests/benchmark.cjs` scores the current
+methods against synthetic data with a known IEDF. `web/tests/browser-check.cjs` drives the page in Chromium with
 Playwright (load, smoothing methods, manual ranges, exports, themes, phone width);
 `web/tests/pwa-check.cjs` serves the app over HTTP and checks installability and
 that it starts and analyses a file offline.

@@ -1,7 +1,7 @@
 // Service worker: keeps the RFEA Analyzer available offline.
 // Files are served from the cache and refreshed in the background, so a new
 // version appears on the next start. Bump VERSION when the file list changes.
-const VERSION = "rfea-v1";
+const VERSION = "rfea-v2";
 
 const APP_FILES = [
   "./",

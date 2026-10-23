@@ -45,6 +45,7 @@ for (const c of ref) {
     fluxFactor: p.Flux_factor,
     crossSection: p.collision_cross_section,
     voltageShift: p.voltage_shift,
+    pipeline: "legacy",
   };
   const label = `${c.csv} / ${c.case}`;
   let js;

@@ -109,9 +109,14 @@ The CSV file must contain:
 
 ### 5.3 Smoothing of dI/dE
 
-- **SmoothFactordIdV**
-- Controls smoothing applied to the derivative used for the IEDF
-- Higher values → smoother IEDF, less noise
+- **dI/dE smoothing (eV)**, default **1 eV**
+- Width of the moving average applied to the IEDF (the derivative of the I–V curve)
+- Higher values → smoother IEDF, less noise, but broader peaks
+- The width is in eV, so the same value works for any voltage step of the sweep
+
+Before any method, the averaged I–V curve gets a light 1 eV noise filter. All
+smoothing windows are rounded to an odd number of points, so they never shift
+the curve, and each slope is placed at the middle of its voltage step.
 
 ### 5.4 I–V Smoothing Method
 
@@ -119,21 +124,40 @@ Choose one of the following:
 
 ### Recursive (recommended)
 
-- Optimized for single-peak IEDF
-- Automatically detects the main energy peak
-- Best default choice
+Peak-preserving smoothing:
+
+1. Finds every significant peak of the IEDF (at least 20 % of the strongest).
+2. Leaves the I–V curve **unsmoothed within ± Peak protection (eV)** of each
+   peak (default ±10 eV), so the peak shape is kept. These zones are shaded
+   on the plot.
+3. Outside, smooths with a moving average that widens with the distance from
+   the zone (up to ±5 eV) but never reaches into it, so there are no kinks at
+   the zone edges.
+4. Detects the peaks again on the result and repeats until they stop moving.
+
+E<sub>peak</sub> is read from a parabola fitted to the top of the highest peak,
+not snapped to the nearest data point.
+
+On synthetic test data with a known IEDF (`web/tests/benchmark.cjs`) it is the
+most accurate method: about 0.1 eV error on E<sub>peak</sub> and E<sub>avg</sub>,
+for sparse (0.5 V) and dense sweeps and for double-peaked IEDFs.
+
+*Changed in the web version:* the original algorithm counted its windows in
+data points (100 and 200), so it failed on sparse sweeps, and it crashed when a
+data point fell exactly on the edge of the protected zone. The Python desktop
+app (tag `python-final`) still uses the original algorithm.
 
 ### Moving Average (Mavg)
 
 - Simple moving average
-- Adjustable window size
+- Window in data points (default 5; use an odd number)
 
 ### Savitzky–Golay (SG)
 
 - Polynomial smoothing
 - Parameters:
     - Polynomial order
-    - Window length (odd number)
+    - Window length in data points (odd number)
 
 ---
 
