@@ -263,4 +263,28 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .panel { border-right: none; border-bottom: 1px solid var(--border); overflow: visible; }
   .plot { min-height: 420px; }
   .brand .sub { display: none; }
+  .appbar { flex-wrap: wrap; row-gap: 8px; }
+  .appbar-actions { flex-wrap: wrap; gap: 6px; }
+  .appbar-actions .btn { padding: 6px 10px; }
 }
+
+/* ---------- What's new ---------- */
+#btn-whatsnew { position: relative; }
+#btn-whatsnew .dot {
+  position: absolute; top: 4px; right: 4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+}
+#btn-whatsnew .dot[hidden] { display: none; }
+.changelog { display: flex; flex-direction: column; gap: 14px; max-height: min(60vh, 560px); overflow-y: auto; padding-right: 4px; }
+.changelog section { border-top: 1px solid var(--border); padding-top: 10px; }
+.changelog section:first-child { border-top: none; padding-top: 0; }
+.changelog h3 { margin: 0 0 6px; font: 600 14px "Helvetica Neue", Arial, sans-serif; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.changelog .ver {
+  font: 600 11.5px ui-monospace, Menlo, Consolas, monospace;
+  background: var(--mint); color: var(--on-mint);
+  border-radius: 6px; padding: 1px 7px;
+}
+.changelog .date { margin-left: auto; color: var(--text-lo); font-weight: 400; font-size: 12px; font-variant-numeric: tabular-nums; }
+.changelog ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.changelog li { line-height: 1.45; }

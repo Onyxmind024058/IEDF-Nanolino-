@@ -36,7 +36,8 @@
       <button type="button" data-theme-btn="dark">Dark</button>
     </div>
     <button type="button" id="btn-install" class="btn primary" hidden>Install app</button>
-    <a class="btn" id="btn-help"href="https://onyxmind024058.github.io/IEDF-Nanolino-/" target="_blank" rel="noopener">Help</a>
+    <button type="button" id="btn-whatsnew" class="btn" aria-haspopup="dialog">What’s new<span class="dot" id="whatsnew-dot" hidden aria-label="new"></span></button>
+    <a class="btn" id="btn-help" href="https://onyxmind024058.github.io/IEDF-Nanolino-/" target="_blank" rel="noopener">Help</a>
     <button type="button" id="btn-about" class="btn">About</button>
   </div>
 </header>
@@ -162,11 +163,20 @@
   </form>
 </dialog>
 
+<dialog id="whatsnew-dialog" class="modal">
+  <form method="dialog" class="modal-body">
+    <h2>What’s new</h2>
+    <div id="whatsnew-list" class="changelog"></div>
+    <div class="modal-actions"><span class="spacer"></span><button class="btn primary">Close</button></div>
+  </form>
+</dialog>
+
 <dialog id="about-dialog" class="modal small">
   <form method="dialog" class="modal-body">
     <h2>RFEA Analyzer</h2>
     <p>Web version of the RFEA analysis by P. Hiret, Universität Basel.<br>
        <a href="mailto:paul.hiret@unibas.ch">paul.hiret@unibas.ch</a></p>
+    <p class="muted" id="about-version"></p>
     <p class="muted">Everything runs in your browser; files are not uploaded.
        Licensed CC BY-NC 4.0. Plots by plotly.js (MIT).</p>
     <div class="modal-actions"><span class="spacer"></span><button class="btn primary">Close</button></div>

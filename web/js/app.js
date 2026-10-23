@@ -561,6 +561,78 @@
 
   $("btn-about").addEventListener("click", () => $("about-dialog").showModal());
 
+  // ---------------- What's new ----------------
+  // Newest first. Add an entry (and bump APP_VERSION) with every release.
+  const APP_VERSION = "2.1.0";
+  const CHANGELOG = [
+    {
+      version: "2.1.0",
+      date: "2026-10-23",
+      title: "Better Recursive smoothing",
+      items: [
+        "Recursive smoothing rewritten: it keeps every significant IEDF peak unsmoothed (shaded on the plot) and smooths the rest with windows in eV, so it works for any voltage step. It no longer fails on sparse 0.5 V sweeps or crashes on round voltage grids.",
+        "E<sub>peak</sub> comes from a parabola fitted to the top of the peak instead of the nearest data point.",
+        "dI/dE smoothing is now set in eV (default 1 eV, was 50 points).",
+        "All methods: each slope is placed at the middle of its voltage step and smoothing windows have an odd number of points. This removes a bias of about half a voltage step in E<sub>peak</sub> and E<sub>avg</sub>.",
+        "Mavg window default is 5 points (was 20).",
+        "Results differ from earlier versions, and saved settings were reset once because the dI/dE field changed units.",
+      ],
+    },
+    {
+      version: "2.0.0",
+      date: "2026-10-22",
+      title: "RFEA Analyzer in the browser",
+      items: [
+        "The analysis now runs in any browser, with nothing to install. CSV files are read on your computer and never uploaded.",
+        "Installable as an app (Install app button) that works offline and opens .csv files directly.",
+        "University of Basel light and dark themes.",
+        "Physics fixes: ion density now converts T<sub>e</sub> from eV to joules (it was about 2.5×10⁹ times too small), and the τ<sub>i</sub>/τ<sub>rf</sub> formula and atomic mass unit are corrected.",
+        "He Impedans gas works, f<sub>rf</sub> is entered in MHz, and the hole radius default is 400 µm.",
+        "Help button linking to the project page.",
+      ],
+    },
+    {
+      version: "1.1.4",
+      date: "",
+      title: "Last Python desktop release",
+      items: ["Windows desktop app. Its code stays available in the project history."],
+    },
+  ];
+
+  function renderWhatsNew() {
+    const list = $("whatsnew-list");
+    list.textContent = "";
+    for (const entry of CHANGELOG) {
+      const sec = document.createElement("section");
+      const h = document.createElement("h3");
+      h.innerHTML = `<span class="ver">${entry.version}</span> ${entry.title}`;
+      if (entry.date) {
+        const d = document.createElement("span");
+        d.className = "date";
+        d.textContent = entry.date;
+        h.appendChild(d);
+      }
+      const ul = document.createElement("ul");
+      for (const item of entry.items) {
+        const li = document.createElement("li");
+        li.innerHTML = item; // fixed text from this file, only <sub> markup
+        ul.appendChild(li);
+      }
+      sec.append(h, ul);
+      list.appendChild(sec);
+    }
+  }
+
+  $("about-version").textContent = `Version ${APP_VERSION}`;
+  // A dot on the button until the newest entry has been opened once
+  if (store.get("rfea-seen-version") !== APP_VERSION) $("whatsnew-dot").hidden = false;
+  $("btn-whatsnew").addEventListener("click", () => {
+    renderWhatsNew();
+    $("whatsnew-dialog").showModal();
+    store.set("rfea-seen-version", APP_VERSION);
+    $("whatsnew-dot").hidden = true;
+  });
+
   // ---------------- Installable app (PWA) ----------------
   // Offline cache; service workers only run over http(s), not from file://
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
