@@ -4,6 +4,22 @@
 
 Runs in the browser, nothing to install. CSV files are read on your computer and never uploaded.
 
+### Install it as an app (PWA)
+
+The analyzer can be installed like a normal program: it gets its own window and icon, starts from the Start menu, Dock or home screen, and **works offline** after the first visit. Open the link above, then:
+
+| Device | How to install |
+|---|---|
+| **Windows, macOS, Linux** (Chrome or Edge) | Click **Install app** in the app's top bar, or the install icon at the right of the address bar. |
+| **Android** (Chrome) | Menu **⋮** → **Install app** (or **Add to Home screen**). |
+| **iPhone / iPad** (Safari) | **Share** button → **Add to Home Screen**. |
+
+- **Open CSV files directly (desktop):** right-click a `.csv` → **Open with** → **RFEA Analyzer**.
+- **Updates are automatic:** a new version downloads in the background and appears the next time you open the app.
+- **Uninstall:** in the app window, menu **⋮** → **Uninstall RFEA Analyzer**; on a phone, remove the icon like any other app.
+
+Firefox and Safari on macOS can't install it, but the website works the same in them.
+
 # **RFEA Analyzer – User Manual**
 
 ## 1. Introduction
