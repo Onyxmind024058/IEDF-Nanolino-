@@ -562,9 +562,18 @@
   $("btn-about").addEventListener("click", () => $("about-dialog").showModal());
 
   // ---------------- What's new ----------------
-  // Newest first. Add an entry (and bump APP_VERSION) with every release.
-  const APP_VERSION = "2.1.0";
+  // Newest first. With every release add an entry, bump APP_VERSION and set the
+  // same version in sw.js (VERSION = "rfea-<APP_VERSION>").
+  const APP_VERSION = "2.1.1";
   const CHANGELOG = [
+    {
+      version: "2.1.1",
+      date: "2026-10-23",
+      title: "Reliable updates",
+      items: [
+        "Fixed: after an update, the What’s new button could do nothing because the page mixed old and new files. Each version is now downloaded as one complete set, and the app reloads once when a new version arrives.",
+      ],
+    },
     {
       version: "2.1.0",
       date: "2026-10-23",
@@ -636,7 +645,16 @@
   // ---------------- Installable app (PWA) ----------------
   // Offline cache; service workers only run over http(s), not from file://
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-    navigator.serviceWorker.register("sw.js").catch(() => { /* still works online */ });
+    // A new release takes over in the background: reload once so the page
+    // runs the new files instead of a mix of old and new
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || reloading) return;
+      reloading = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => { /* still works online */ });
   }
 
   // Chrome/Edge: show our own Install button when the browser offers installation

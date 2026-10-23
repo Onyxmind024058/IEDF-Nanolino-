@@ -1,7 +1,9 @@
 // Service worker: keeps the RFEA Analyzer available offline.
-// Files are served from the cache and refreshed in the background, so a new
-// version appears on the next start. Bump VERSION when the file list changes.
-const VERSION = "rfea-v3";
+// Each release is cached as one complete set, downloaded fresh (bypassing the
+// browser's HTTP cache), so a page never mixes files from two versions.
+// VERSION must equal APP_VERSION in js/app.js (tests/pwa-check.cjs checks it):
+// changing it is what makes browsers download the new release.
+const VERSION = "rfea-2.1.1";
 
 const APP_FILES = [
   "./",
@@ -20,7 +22,9 @@ const APP_FILES = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(VERSION).then((cache) => cache.addAll(APP_FILES)).then(() => self.skipWaiting())
+    caches.open(VERSION)
+      .then((cache) => cache.addAll(APP_FILES.map((url) => new Request(url, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -35,23 +39,11 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
-
+  // Opening the app with a file (file_handlers) or a query string still serves index.html
+  const key = req.mode === "navigate" ? "./" : req;
   event.respondWith(
-    caches.open(VERSION).then(async (cache) => {
-      // Opening the app with a file (file_handlers) or a query string still serves index.html
-      const key = req.mode === "navigate" ? "./" : req;
-      const cached = await cache.match(key, { ignoreSearch: req.mode === "navigate" });
-      const network = fetch(req)
-        .then((res) => {
-          if (res.ok) cache.put(key, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      if (cached) {
-        event.waitUntil(network);
-        return cached;
-      }
-      return network;
-    })
+    caches.open(VERSION)
+      .then((cache) => cache.match(key, { ignoreSearch: req.mode === "navigate" }))
+      .then((cached) => cached || fetch(req))
   );
 });
