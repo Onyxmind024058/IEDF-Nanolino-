@@ -1,9 +1,10 @@
-"""Generate test CSVs and Python reference results for web/tests/compare.mjs.
+"""Generate test CSV/SDF files and Python reference results for web/tests/compare.mjs.
 
 Run from the repository root:
     python web/tests/make_reference.py web/tests/data [real_export.csv ...]
 """
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -27,6 +28,22 @@ def write_csv(path, V, traces, sep):
     path.write_text("\n".join(lines))
 
 
+def write_sdf(path, V, traces, electrode_voltage):
+    """Binary Semion .sdf in the layout import_sdf reads. The stored bias is
+    the voltage axis plus noise; import_sdf recovers V with a straight-line fit."""
+    settings = json.dumps({"activeSensors": 1, "voltageChans": 4, "scanDate": "2024-01-01T00:00:00"}).encode()
+    out = struct.pack(">I", len(settings)) + settings + b"\r\n[DATA]\r\n"
+    out += struct.pack(">13I", 0xACDCB070, 17, 0, 0xFFFFFFFF, 0, 0, 0, 0, 1, len(traces), V.size, 0, 0)
+    out += struct.pack(">I", len(traces))
+    for I in traces:
+        chans = [np.full(V.size, -1.5), np.full(V.size, -1.4),
+                 electrode_voltage + 0.05 * rng.standard_normal(V.size),
+                 V + 0.05 * rng.standard_normal(V.size)]
+        out += struct.pack(">II", 1 + len(chans), V.size)
+        out += np.vstack([I] + chans).astype(">f8").tobytes()
+    path.write_bytes(out)
+
+
 def sigmoid_step(V, E0, width, height):
     return height * (1 - 1 / (1 + np.exp(-(V - E0) / width)))
 
@@ -44,6 +61,11 @@ write_csv(out / "bimodal_comma.csv", V,
           [sigmoid_step(V, 30, 2.5, 4e-7) + sigmoid_step(V, 85, 4, 6e-7) + 2e-9 * rng.standard_normal(V.size)
            for _ in range(3)], ",")
 cases["bimodal_comma.csv"] = {}
+
+V = np.linspace(-20, 150, 400)
+write_sdf(out / "semion_scan.sdf", V,
+          [sigmoid_step(V, 70, 3, 1e-6) + 3e-9 * rng.standard_normal(V.size) for _ in range(5)], 0.02)
+cases["semion_scan.sdf"] = {}
 
 for f in extra:
     (out / f.name).write_bytes(f.read_bytes())
@@ -72,7 +94,8 @@ for csv in cases:
             Eavg, flux, dIdE, E, ni, ev, ionf, Ismooth, Iavg, Epeak, tau, Vavg = full_analysis(
                 str(out / csv), kw.pop("pressure"), False, **kw)
             res = dict(Eavg=Eavg, flux=flux, ni=ni, Epeak=Epeak, tauRatio=tau, electrodeVoltage=ev,
-                       ionFlux=ionf, dIdE=list(map(float, dIdE)), E=list(map(float, E)),
+                       ionFlux=None if np.isnan(ionf) else ionf,  # NaN for .sdf (JSON has no NaN)
+                       dIdE=list(map(float, dIdE)), E=list(map(float, E)),
                        Ismooth=list(map(float, Ismooth)), Iavg=list(map(float, Iavg)),
                        Vavg=list(map(float, Vavg)))
         except Exception as e:  # recorded so the JS port can be checked to fail too

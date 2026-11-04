@@ -7,7 +7,7 @@
   const manualPlotEl = $("manual-plot");
 
   const state = {
-    text: null,
+    data: null, // raw bytes of the opened .csv or .sdf file
     fileName: null,
     manualRanges: [],
     result: null,
@@ -158,7 +158,7 @@
   function run() {
     syncControls();
     saveForm();
-    if (!state.text) return;
+    if (!state.data) return;
     let params;
     try {
       params = readParams();
@@ -169,7 +169,7 @@
     const t0 = performance.now();
     let r;
     try {
-      r = RFEA.fullAnalysis(state.text, params);
+      r = RFEA.fullAnalysis(state.data, params);
     } catch (e) {
       setStatus(`Analysis failed: ${e.message}`, true);
       return;
@@ -190,7 +190,10 @@
     document.querySelectorAll("#results dd").forEach((dd) => {
       const k = dd.dataset.k;
       const v = r[k];
-      dd.textContent = k === "tauRatio" && (v === null || !Number.isFinite(v)) ? "N/A" : fmtG(v);
+      if (k === "tauRatio" && (v === null || !Number.isFinite(v))) dd.textContent = "N/A";
+      // Semion works out the ion flux only on CSV export; .sdf files do not store it
+      else if (k === "ionFlux" && Number.isNaN(v)) dd.textContent = "n/a (.sdf)";
+      else dd.textContent = fmtG(v);
       if (UNITS[k]) {
         const u = document.createElement("span");
         u.className = "unit";
@@ -285,7 +288,7 @@
     const c = colors();
     const layout = baseLayout(c);
     layout.annotations = [{
-      text: "Open a CSV file to see the I–V curve and IEDF", showarrow: false,
+      text: "Open a .csv or .sdf file to see the I–V curve and IEDF", showarrow: false,
       xref: "paper", yref: "paper", x: 0.5, y: 0.5, font: { color: c.textLo, size: 14 },
     }];
     layout.xaxis.showgrid = layout.yaxis.showgrid = false;
@@ -297,7 +300,7 @@
   async function loadFile(file) {
     if (!file) return;
     try {
-      state.text = await file.text();
+      state.data = await file.arrayBuffer();
     } catch (e) {
       setStatus(`Could not read ${file.name}: ${e.message}`, true);
       return;
@@ -405,13 +408,13 @@
   let rawIV = null;
 
   function openManual() {
-    if (!state.text) {
-      setStatus("Open a CSV file first.", true);
+    if (!state.data) {
+      setStatus("Open a .csv or .sdf file first.", true);
       return;
     }
     try {
       const shift = $("shift-on").checked ? num("shift") : 0;
-      const { table } = RFEA.importFile(state.text);
+      const { table } = RFEA.importFile(state.data);
       const avg = RFEA.traceAverageAndSmooth(RFEA.separateTraces(table), 10, shift);
       rawIV = { V: Array.from(avg.Vavg), I: Array.from(avg.Iavg) };
     } catch (e) {
@@ -564,8 +567,18 @@
   // ---------------- What's new ----------------
   // Newest first. With every release add an entry, bump APP_VERSION and set the
   // same version in sw.js (VERSION = "rfea-<APP_VERSION>").
-  const APP_VERSION = "2.1.1";
+  const APP_VERSION = "2.2.0";
   const CHANGELOG = [
+    {
+      version: "2.2.0",
+      date: "2026-11-04",
+      title: "Open .sdf files",
+      items: [
+        "Semion binary scan files (.sdf) open directly, with no CSV export needed. They give the same I–V traces and electrode voltage as the CSV export.",
+        "The imported ion flux shows as n/a for .sdf files because Semion only works it out when it exports a CSV.",
+        "The installed app can be set to open .sdf files too.",
+      ],
+    },
     {
       version: "2.1.1",
       date: "2026-10-23",
@@ -676,7 +689,7 @@
     setStatus("RFEA Analyzer installed");
   });
 
-  // Installed app opened with a CSV ("Open with" / double-click on desktop)
+  // Installed app opened with a .csv or .sdf ("Open with" / double-click on desktop)
   if ("launchQueue" in window) {
     window.launchQueue.setConsumer(async (params) => {
       if (params.files && params.files.length) loadFile(await params.files[0].getFile());

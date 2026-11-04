@@ -14,6 +14,7 @@ const RTOL = 1e-6;
 
 function relErr(a, b) {
   if (a === b) return 0;
+  if (b === null && Number.isNaN(a)) return 0; // NaN is written as null in JSON
   if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.isNaN(a) && Number.isNaN(b) ? 0 : Infinity;
   return Math.abs(a - b) / Math.max(Math.abs(b), 1e-300);
 }
@@ -50,7 +51,7 @@ for (const c of ref) {
   const label = `${c.csv} / ${c.case}`;
   let js;
   try {
-    js = fullAnalysis(readFileSync(join(dir, c.csv), "utf8"), params);
+    js = fullAnalysis(readFileSync(join(dir, c.csv)), params);
   } catch (e) {
     js = { error: String(e.message) };
   }

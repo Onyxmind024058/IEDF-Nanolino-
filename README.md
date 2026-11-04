@@ -2,7 +2,7 @@
 
 ### ▶ Open the RFEA Analyzer: **[onyxmind024058.github.io/IEDF-Nanolino-/web/](https://onyxmind024058.github.io/IEDF-Nanolino-/web/)**
 
-Runs in the browser, nothing to install. CSV files are read on your computer and never uploaded.
+Runs in the browser, nothing to install. Semion `.csv` exports and `.sdf` scan files are read on your computer and never uploaded.
 
 ### Install it as an app (PWA)
 
@@ -14,7 +14,7 @@ The analyzer can be installed like a normal program: it gets its own window and 
 | **Android** (Chrome) | Menu **⋮** → **Install app** (or **Add to Home screen**). |
 | **iPhone / iPad** (Safari) | **Share** button → **Add to Home Screen**. |
 
-- **Open CSV files directly (desktop):** right-click a `.csv` → **Open with** → **RFEA Analyzer**.
+- **Open files directly (desktop):** right-click a `.csv` or `.sdf` → **Open with** → **RFEA Analyzer**.
 - **Updates are automatic:** a new version downloads in the background and appears the next time you open the app.
 - **Uninstall:** in the app window, menu **⋮** → **Uninstall RFEA Analyzer**; on a phone, remove the icon like any other app.
 
@@ -74,11 +74,14 @@ The interface uses the University of Basel colours (`themes/basel-light.qss`, `t
 
 ## 4. Loading Data
 
-### 4.1 Opening a CSV file
-the csv file must have been exported from Semion software using semicolon or coma
+### 4.1 Opening a data file
+Two kinds of Semion file can be opened:
 
-1. Click **“Open CSV…”**
-2. Select an RFEA CSV file using the file explorer
+- a **CSV export** (semicolon or comma separated), or
+- the **binary `.sdf` scan file** itself, with no export needed.
+
+1. Click **“Open file…”**
+2. Select a `.csv` or `.sdf` file using the file explorer
 3. The file path will appear in the interface
 4. The analysis runs automatically
 
@@ -91,6 +94,21 @@ The CSV file must contain:
 - Multiple I–V traces separated by blank or NaN rows
 
 (Compatible with the MATLAB RFEA acquisition format.)
+
+### 4.3 SDF files
+
+A `.sdf` file holds the raw I–V traces and the measured voltages. The analyzer
+reads the same traces as the CSV export: the voltage axis is a straight-line fit
+of the measured bias for each trace, as Semion does on export. Results match the
+CSV export to within its 6-digit rounding.
+
+- **Ion flux (imported)** shows as *n/a*. Semion works it out only when it exports
+  a CSV and does not store it in the `.sdf`. It is only displayed; the analysis
+  does not use it.
+- **Electrode voltage** is the mean of the electrode-voltage channel. In long scans
+  it can differ from the CSV header by a fraction of a millivolt (seen once in
+  a 15-trace scan: −9.32 mV instead of −8.97 mV). It is only displayed.
+- Only single-sensor scans are supported. Other files are refused with a message.
 
 ---
 

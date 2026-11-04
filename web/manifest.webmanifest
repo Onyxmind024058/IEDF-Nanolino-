@@ -16,7 +16,7 @@
   "file_handlers": [
     {
       "action": "./",
-      "accept": { "text/csv": [".csv"] }
+      "accept": { "text/csv": [".csv"], "application/octet-stream": [".sdf"] }
     }
   ]
 }

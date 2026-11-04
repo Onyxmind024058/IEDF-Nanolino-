@@ -47,9 +47,9 @@
     <fieldset class="group">
       <legend>File</legend>
       <label class="drop" id="drop">
-        <input type="file" id="file" accept=".csv,text/csv">
-        <span class="drop-title">Open CSV…</span>
-        <span class="drop-hint">or drop a Semion export here</span>
+        <input type="file" id="file" accept=".csv,.sdf,text/csv">
+        <span class="drop-title">Open file…</span>
+        <span class="drop-hint">or drop a Semion .csv or .sdf file here</span>
       </label>
       <p class="muted" id="file-name">No file selected. The file is read in your browser and never uploaded.</p>
     </fieldset>
@@ -134,7 +134,7 @@
   <main class="plot-area">
     <div class="plot-bar">
       <button type="button" class="btn ghost" id="btn-panel" aria-expanded="true">Hide panel</button>
-      <span class="muted" id="status">Open a CSV file to start.</span>
+      <span class="muted" id="status">Open a .csv or .sdf file to start.</span>
     </div>
     <div id="plot" class="plot"></div>
   </main>

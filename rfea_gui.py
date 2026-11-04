@@ -433,7 +433,7 @@ class MainWindow(QMainWindow):
 
         file_box = QGroupBox("File")
         fb = QVBoxLayout(file_box)
-        self.btn_open = QPushButton("Open CSV…")
+        self.btn_open = QPushButton("Open file…")
         self.lbl_file = QLabel("No file selected")
         self.lbl_file.setWordWrap(True)
         fb.addWidget(self.btn_open)
@@ -619,7 +619,7 @@ class MainWindow(QMainWindow):
 
         # ---------------- Menu bar / status bar ----------------
         menu_file = self.menuBar().addMenu("File")
-        menu_file.addAction("Open CSV…", self.open_file)
+        menu_file.addAction("Open file…", self.open_file)
         menu_file.addSeparator()
         menu_file.addAction("Export data (CSV)…", self.export_csv)
         menu_file.addAction("Export plot (PNG/SVG)…", self.export_plot)
@@ -643,7 +643,7 @@ class MainWindow(QMainWindow):
 
         self.lbl_theme = QLabel()
         self.statusBar().addPermanentWidget(self.lbl_theme)
-        self.statusBar().showMessage("Ready — open a CSV file to start")
+        self.statusBar().showMessage("Ready — open a Semion .csv or .sdf file to start")
         self._update_theme_label()
         self._style_axes()
 
@@ -769,7 +769,10 @@ class MainWindow(QMainWindow):
             self.btn_toggle_panel.setText("Hide panel")
 
     def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV Files (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open RFEA data", "",
+            "RFEA data (*.csv *.sdf);;Semion CSV export (*.csv);;Semion scan file (*.sdf);;All files (*)"
+        )
         if not path:
             return
         self.csv_path = Path(path)
@@ -778,7 +781,7 @@ class MainWindow(QMainWindow):
 
     def _compute_raw_iv_for_manual_dialog(self):
         if self.csv_path is None or not self.csv_path.exists():
-            raise ValueError("Please open a CSV file first.")
+            raise ValueError("Please open a .csv or .sdf file first.")
 
         electrode_voltage, ion_flux, traces_df = import_file(str(self.csv_path))
         I, V = separate_traces_from_table(traces_df)
@@ -1087,6 +1090,8 @@ class MainWindow(QMainWindow):
         self.last["E"] = np.asarray(E).ravel()
         self.last["dIdE"] = np.asarray(dIdE).ravel()
 
+        # Ion flux is computed by Semion on CSV export; .sdf files do not store it
+        ion_flux_str = "n/a (not stored in .sdf)" if np.isnan(Ion_flux) else f"{Ion_flux:.6g}"
         self.lbl_stats.setText(
             f"Eavg: {Eavg:.6g}\n"
             f"Flux: {flux:.6g}\n"
@@ -1094,7 +1099,7 @@ class MainWindow(QMainWindow):
             f"Epeak: {Epeak:.6g}\n"
             f"Tau ratio (tau_i/tau_rf): {tau_str}\n"
             f"Electrode_Voltage: {Electrode_Voltage:.6g}\n"
-            f"Ion_flux (imported): {Ion_flux:.6g}"
+            f"Ion_flux (imported): {ion_flux_str}"
         )
 
         ax1, ax2 = self.canvas.ax1, self.canvas.ax2

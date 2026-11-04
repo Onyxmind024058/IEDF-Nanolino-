@@ -1,7 +1,7 @@
 # RFEA Analyzer — web version
 
 The RFEA analysis running entirely in the browser: no installation, no server,
-and CSV files are read locally and never uploaded.
+and Semion `.csv` exports and `.sdf` scan files are read locally and never uploaded.
 
 ## Use it
 
@@ -17,14 +17,16 @@ normal program. It then has its own window and icon, and works without internet.
 
 - **Chrome / Edge (Windows, macOS, Linux):** click **Install app** in the top bar,
   or the install icon in the address bar. The installed app can then open `.csv`
-  files directly ("Open with → RFEA Analyzer").
+  and `.sdf` files directly ("Open with → RFEA Analyzer").
 - **Android (Chrome):** menu ⋮ → **Install app** / **Add to Home screen**.
 - **iPhone / iPad (Safari):** Share → **Add to Home Screen**.
 
 New versions are picked up automatically: the app updates itself in the
 background and shows the new version the next time it is opened.
 
-Then open a Semion CSV export (button or drag and drop). Results and plots
+Then open a Semion CSV export or `.sdf` scan file (button or drag and drop).
+For `.sdf` files the imported ion flux shows as n/a (Semion does not store it
+in the file). Results and plots
 update as you change parameters. The theme (University of Basel light/dark) and
 the last parameters are remembered in the browser.
 

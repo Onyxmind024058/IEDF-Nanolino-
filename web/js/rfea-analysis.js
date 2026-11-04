@@ -207,8 +207,110 @@ function toNumber(cell) {
 // Analysis (same structure as the Python module)
 // ------------------------------------------------------------------
 
-// import_file: electrode voltage (line 3), ion flux (line 6), traces (line 9+)
-function importFile(text) {
+// ------------------------------------------------------------------
+// Binary Semion .sdf scan files (same layout as import_sdf in Python)
+// ------------------------------------------------------------------
+// uint32 length + JSON scan settings, then "\r\n[DATA]\r\n" and, big-endian:
+// uint32 magic 0xACDCB070, uint32 stream version, 11 uint32 header words,
+// uint32 nTraces; per trace uint32 nArrays, uint32 nPoints, then
+// nArrays x nPoints float64: current I [A], the voltage channels [V] (second
+// last = electrode voltage) and, last, the measured discriminator bias [V].
+const SDF_MARKER = [13, 10, 91, 68, 65, 84, 65, 93, 13, 10]; // \r\n[DATA]\r\n
+const SDF_MAGIC = 0xacdcb070;
+
+function asBytes(data) {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  return null;
+}
+
+function findBytes(bytes, pattern, from) {
+  outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
+    for (let k = 0; k < pattern.length; k++) if (bytes[i + k] !== pattern[k]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+// True for a binary .sdf file (detected by content, not by extension)
+function isSdf(data) {
+  const b = asBytes(data);
+  if (!b || b.length < 8) return false;
+  const n = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(0, false);
+  return b[4] === 0x7b && findBytes(b, SDF_MARKER, 4 + n) !== -1;
+}
+
+// Returns the same shape as importFile. V is a straight-line fit of the
+// measured bias per trace (the V column Semion writes to its CSV export);
+// ion flux is not stored in .sdf (NaN); dIdE is recomputed by the analysis.
+function importSdf(data) {
+  const b = asBytes(data);
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const n = view.getUint32(0, false);
+  let settings;
+  try {
+    settings = JSON.parse(new TextDecoder("utf-8").decode(b.subarray(4, 4 + n)));
+  } catch (e) {
+    throw new Error(`SDF: could not read the scan settings: ${e.message}`);
+  }
+  if (Number(settings.activeSensors ?? 1) !== 1) {
+    throw new Error(`SDF: only single-sensor scans are supported (this file has activeSensors=${settings.activeSensors})`);
+  }
+  const start = findBytes(b, SDF_MARKER, 4 + n) + SDF_MARKER.length;
+  const len = b.length - start;
+  const u32 = (o) => view.getUint32(start + o, false);
+  if (len < 56 || u32(0) !== SDF_MAGIC) throw new Error("SDF: unrecognised data block (wrong magic number)");
+
+  const nTraces = u32(52);
+  let off = 56;
+  const V = [];
+  const I = [];
+  const dIdE = [];
+  let evSum = 0;
+  let evCount = 0;
+  for (let t = 0; t < nTraces; t++) {
+    if (off + 8 > len) throw new Error(`SDF: file ends inside trace ${t + 1}`);
+    const nArr = u32(off);
+    const nPts = u32(off + 4);
+    off += 8;
+    if (nArr < 3 || off + 8 * nArr * nPts > len) {
+      throw new Error(`SDF: trace ${t + 1} has an unexpected size (${nArr} x ${nPts})`);
+    }
+    const f64 = (a, k) => view.getFloat64(start + off + 8 * (a * nPts + k), false);
+    // Least-squares line through the measured bias against the point index
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let k = 0; k < nPts; k++) {
+      const y = f64(nArr - 1, k);
+      sx += k; sy += y; sxx += k * k; sxy += k * y;
+    }
+    const den = nPts * sxx - sx * sx;
+    const slope = den ? (nPts * sxy - sx * sy) / den : 0;
+    const intercept = (sy - slope * sx) / nPts;
+    for (let k = 0; k < nPts; k++) {
+      V.push(intercept + slope * k);
+      I.push(f64(0, k));
+      dIdE.push(NaN);
+      evSum += f64(nArr - 2, k);
+      evCount++;
+    }
+    V.push(NaN); I.push(NaN); dIdE.push(NaN); // trace separator
+    off += 8 * nArr * nPts;
+  }
+  if (off !== len) throw new Error(`SDF: ${len - off} unexpected bytes after the last trace`);
+  if (!nTraces) throw new Error("SDF: the file contains no traces");
+  return { electrodeVoltage: evSum / evCount, ionFlux: NaN, table: { V, I, dIdE } };
+}
+
+// import_file: electrode voltage (line 3), ion flux (line 6), traces (line 9+).
+// Accepts CSV text, or the raw bytes (ArrayBuffer / Uint8Array) of a .csv or .sdf file.
+function importFile(data) {
+  const bytes = asBytes(data);
+  if (bytes) {
+    if (isSdf(bytes)) return importSdf(bytes);
+    data = new TextDecoder("utf-8").decode(bytes);
+  }
+  const text = data;
   const lines = text.split(/\r\n|\r|\n/);
 
   const secondCol = (line1) => {
@@ -591,7 +693,7 @@ const CROSS_SECTIONS = {
   "He Impedans": 8.8e-19 / 3,
 };
 
-// full_analysis: CSV text + parameters -> everything the UI shows
+// full_analysis: CSV text or .csv/.sdf bytes + parameters -> everything the UI shows
 function fullAnalysis(text, p) {
   const { electrodeVoltage, ionFlux, table } = importFile(text);
   const traces = separateTraces(table);
@@ -615,5 +717,5 @@ function fullAnalysis(text, p) {
   };
 }
 
-globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis };
+globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis };
 })();

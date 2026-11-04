@@ -89,9 +89,90 @@ def full_analysis(
     )
 
 
+SDF_DATA_MARKER = b"\r\n[DATA]\r\n"
+SDF_MAGIC = 0xACDCB070
+
+
+def is_sdf(raw: bytes) -> bool:
+    """True for a binary Semion .sdf scan file (detected by content, not extension)."""
+    if len(raw) < 8:
+        return False
+    n = int.from_bytes(raw[:4], "big")
+    return raw[4:5] == b"{" and raw[4 + n:].find(SDF_DATA_MARKER) != -1
+
+
+def import_sdf(raw: bytes) -> Tuple[float, float, pd.DataFrame]:
+    """Read a binary Semion .sdf "Time Averaged IV scan".
+
+    Layout (big-endian), reverse-engineered against the matching CSV export:
+      uint32 length + JSON scan settings, then "\\r\\n[DATA]\\r\\n" and
+      uint32 magic 0xACDCB070, uint32 stream version, 11 uint32 header words,
+      uint32 n_traces; per trace: uint32 n_arrays, uint32 n_points, then
+      n_arrays x n_points float64: collector current I [A], the voltage
+      channels [V] (the second last is the electrode voltage) and, last, the
+      measured discriminator bias [V].
+
+    Returns the same (Electrode_Voltage, Ion_flux, table) as import_file:
+      * V: straight-line fit of the measured bias per trace (this is the V
+        column Semion writes to its CSV export)
+      * Electrode_Voltage: mean of the electrode-voltage channel over all traces
+      * Ion_flux: NaN, Semion computes it on export and it is not stored in .sdf
+      * dIdE: NaN (not stored; the analysis recomputes it)
+    """
+    import json
+    import struct
+
+    n = int.from_bytes(raw[:4], "big")
+    try:
+        settings = json.loads(raw[4:4 + n].decode("utf-8"))
+    except ValueError as e:
+        raise ValueError(f"SDF: could not read the scan settings: {e}") from e
+    if int(settings.get("activeSensors", 1)) != 1:
+        raise ValueError("SDF: only single-sensor scans are supported "
+                         f"(this file has activeSensors={settings.get('activeSensors')})")
+
+    start = raw.find(SDF_DATA_MARKER, 4 + n)
+    d = raw[start + len(SDF_DATA_MARKER):]
+    if len(d) < 56 or struct.unpack_from(">I", d, 0)[0] != SDF_MAGIC:
+        raise ValueError("SDF: unrecognised data block (wrong magic number)")
+
+    n_traces = struct.unpack_from(">I", d, 52)[0]
+    off = 56
+    frames = []
+    for t in range(n_traces):
+        if off + 8 > len(d):
+            raise ValueError(f"SDF: file ends inside trace {t + 1}")
+        n_arr, n_pts = struct.unpack_from(">II", d, off)
+        off += 8
+        if n_arr < 3 or off + 8 * n_arr * n_pts > len(d):
+            raise ValueError(f"SDF: trace {t + 1} has an unexpected size ({n_arr} x {n_pts})")
+        A = np.frombuffer(d, dtype=">f8", count=n_arr * n_pts, offset=off).reshape(n_arr, n_pts).astype(float)
+        off += 8 * n_arr * n_pts
+        frames.append(A)
+    if off != len(d):
+        raise ValueError(f"SDF: {len(d) - off} unexpected bytes after the last trace")
+    if not frames:
+        raise ValueError("SDF: the file contains no traces")
+
+    Electrode_Voltage = float(np.mean(np.concatenate([A[-2] for A in frames])))
+
+    parts = []
+    for A in frames:
+        idx = np.arange(A.shape[1])
+        slope, intercept = np.polyfit(idx, A[-1], 1)
+        V = intercept + slope * idx
+        parts.append(pd.DataFrame({"V": V, "I": A[0], "dIdE": np.nan}))
+        parts.append(pd.DataFrame({"V": [np.nan], "I": [np.nan], "dIdE": [np.nan]}))
+    df = pd.concat(parts, ignore_index=True)
+    return Electrode_Voltage, float("nan"), df
+
+
 def import_file(filename: str) -> Tuple[float, float, pd.DataFrame]:
-    with open(filename, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.read().splitlines()
+    with open(filename, "rb") as f:
+        raw = f.read()
+    if is_sdf(raw):
+        return import_sdf(raw)
+    lines = raw.decode("utf-8", errors="replace").splitlines()
 
     def _read_second_col_as_float(line_idx_1based: int) -> float:
         idx = line_idx_1based - 1
@@ -453,4 +534,4 @@ def tau_ratio_NF(Mi: float, f_rf: float, Vp: float, ni: float, Te: float = 3.0, 
     s = alpha * Lde * (Vp / Te) ** (3 / 4)
     tau_i = 3 * s * np.sqrt((Mi * u) / (2 * e * Vp))
     tau_rf = 1.0 / f_rf
-    return float(tau_i / tau_rf)
+    return float(tau_i / tau_rf)
