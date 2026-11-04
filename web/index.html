@@ -47,11 +47,21 @@
     <fieldset class="group">
       <legend>File</legend>
       <label class="drop" id="drop">
-        <input type="file" id="file" accept=".csv,.sdf,text/csv">
-        <span class="drop-title">Open file…</span>
-        <span class="drop-hint">or drop a Semion .csv or .sdf file here</span>
+        <input type="file" id="file" accept=".csv,.sdf,text/csv" multiple>
+        <span class="drop-title">Open files…</span>
+        <span class="drop-hint">or drop Semion .csv / .sdf files here; several at once for a batch</span>
       </label>
-      <p class="muted" id="file-name">No file selected. The file is read in your browser and never uploaded.</p>
+      <p class="muted" id="file-name">No file selected. Files are read in your browser and never uploaded.</p>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Automatic review</legend>
+      <label class="check-row"><input type="checkbox" id="auto-names" checked><span>Read pressure, gas and f<sub>rf</sub> from file names (e.g. 25W10PaAr60MHz)</span></label>
+      <div class="grid2">
+        <label><span class="lbl">Must review below SNR</span><input type="number" id="snr-review" value="5" min="0" step="0.5"></label>
+        <label><span class="lbl">Check below SNR</span><input type="number" id="snr-check" value="15" min="0" step="0.5"></label>
+      </div>
+      <p class="muted hint">SNR is the I–V step divided by the noise. Files are also marked <em>must review</em> when E<sub>peak</sub> is at the end of the sweep or ≤ 0 eV, E<sub>avg</sub> ≤ 0 eV or the IEDF is mostly noise.</p>
     </fieldset>
 
     <fieldset class="group">
@@ -134,9 +144,67 @@
   <main class="plot-area">
     <div class="plot-bar">
       <button type="button" class="btn ghost" id="btn-panel" aria-expanded="true">Hide panel</button>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" data-view="plot" aria-pressed="true">Plot</button>
+        <button type="button" data-view="batch" aria-pressed="false">Batch <span id="batch-count"></span></button>
+      </div>
       <span class="muted" id="status">Open a .csv or .sdf file to start.</span>
     </div>
-    <div id="plot" class="plot"></div>
+
+    <section class="view" id="view-plot">
+      <div class="review-bar" id="review-bar" hidden>
+        <div class="review-head">
+          <button type="button" class="btn ghost" id="btn-prev" aria-label="Previous file">◀</button>
+          <span class="review-pos" id="review-pos"></span>
+          <button type="button" class="btn ghost" id="btn-next" aria-label="Next file">▶</button>
+          <strong class="review-name" id="review-name"></strong>
+          <span class="pill" id="review-pill"></span>
+          <span class="review-edited muted" id="review-edited" hidden>own settings</span>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="btn-next-flagged">Next flagged ▶</button>
+        </div>
+        <ul class="flags" id="review-flags"></ul>
+        <div class="review-actions">
+          <input type="text" id="review-note" placeholder="Review note (optional)" aria-label="Review note">
+          <button type="button" class="btn" id="btn-apply-all" title="Copy these settings to every file not yet approved or rejected (file-name settings still apply)">Use settings for all</button>
+          <button type="button" class="btn destructive" id="btn-reject">Reject</button>
+          <button type="button" class="btn primary" id="btn-approve">Approve</button>
+        </div>
+      </div>
+      <div id="plot" class="plot"></div>
+    </section>
+
+    <section class="view" id="view-batch" hidden>
+      <div class="batch-bar">
+        <span id="batch-summary" class="batch-summary"></span>
+        <span class="spacer"></span>
+        <label class="inline-label"><span class="lbl">Show</span>
+          <select id="batch-filter">
+            <option value="all">All files</option>
+            <option value="todo">To review</option>
+            <option value="review">Must review</option>
+            <option value="check">Check</option>
+            <option value="ok">OK</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </label>
+        <button type="button" class="btn" id="btn-approve-ok">Approve all OK</button>
+        <button type="button" class="btn primary" id="btn-export-summary">Export summary CSV</button>
+        <button type="button" class="btn destructive" id="btn-clear">Clear list</button>
+      </div>
+      <div class="table-wrap">
+        <table class="batch">
+          <thead><tr>
+            <th>#</th><th>File</th><th>Status</th><th>Flags</th>
+            <th class="num">E<sub>avg</sub> (eV)</th><th class="num">E<sub>peak</sub> (eV)</th><th class="num">Flux</th><th class="num">SNR</th>
+            <th class="num">P (Pa)</th><th>Gas</th><th class="num">f<sub>rf</sub> (MHz)</th><th>Note</th>
+          </tr></thead>
+          <tbody id="batch-body"></tbody>
+        </table>
+        <p class="muted batch-empty" id="batch-empty">No files yet. Open or drop several .csv / .sdf files to analyse them in one go.</p>
+      </div>
+    </section>
   </main>
 </div>
 

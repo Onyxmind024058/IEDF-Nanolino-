@@ -3,7 +3,7 @@
 // browser's HTTP cache), so a page never mixes files from two versions.
 // VERSION must equal APP_VERSION in js/app.js (tests/pwa-check.cjs checks it):
 // changing it is what makes browsers download the new release.
-const VERSION = "rfea-2.2.0";
+const VERSION = "rfea-2.3.0";
 
 const APP_FILES = [
   "./",

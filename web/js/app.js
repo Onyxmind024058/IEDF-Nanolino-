@@ -7,11 +7,13 @@
   const manualPlotEl = $("manual-plot");
 
   const state = {
-    data: null, // raw bytes of the opened .csv or .sdf file
-    fileName: null,
-    manualRanges: [],
+    files: [], // the batch: one entry per opened file (see addFiles)
+    current: -1, // index of the file shown in the Plot view
+    manualRanges: [], // manual smoothing ranges of the current file
     result: null,
+    params: null,
   };
+  const cur = () => state.files[state.current] || null;
 
   // ---------------- Storage (per-browser convenience only) ----------------
   const store = {
@@ -103,8 +105,40 @@
     return v;
   }
 
-  function readParams() {
-    const method = $("method").value;
+  // The panel settings as a plain object (each file of a batch keeps its own copy)
+  function readForm() {
+    const form = {};
+    for (const id of PARAM_IDS) {
+      const el = $(id);
+      form[id] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    form.manualRanges = state.manualRanges.map((r) => ({ ...r }));
+    return form;
+  }
+
+  function setForm(form) {
+    for (const id of PARAM_IDS) {
+      if (!(id in form)) continue;
+      const el = $(id);
+      if (el.type === "checkbox") el.checked = Boolean(form[id]);
+      else el.value = form[id];
+      el.classList.remove("invalid");
+    }
+    state.manualRanges = (form.manualRanges || []).map((r) => ({ ...r }));
+    syncControls();
+  }
+
+  // Analysis parameters from a settings object; mark=true flags bad panel fields
+  function paramsFromForm(f, mark = false) {
+    const num = (id) => {
+      const raw = String(f[id] ?? "").trim();
+      const v = Number(raw);
+      const ok = raw !== "" && Number.isFinite(v);
+      if (mark) $(id).classList.toggle("invalid", !ok);
+      if (!ok) throw new Error(`Invalid value for "${$(id).closest("label").querySelector(".lbl").textContent.trim()}"`);
+      return v;
+    };
+    const method = f.method;
     let smoothParam = null;
     if (method === "Recursive") smoothParam = num("rec-window");
     else if (method === "Mavg") smoothParam = Math.trunc(num("mavg-window"));
@@ -112,7 +146,7 @@
       let win = Math.trunc(num("sg-window"));
       if (win % 2 === 0) win += 1;
       smoothParam = [Math.trunc(num("sg-poly")), win];
-    } else if (method === "Manual") smoothParam = { ranges: state.manualRanges };
+    } else if (method === "Manual") smoothParam = { ranges: f.manualRanges || [] };
 
     return {
       pressure: num("pressure"),
@@ -129,8 +163,8 @@
         nHoles: num("nholes"),
         holeRadiusUm: num("radius"),
       }),
-      crossSection: RFEA.CROSS_SECTIONS[$("gas").value],
-      voltageShift: $("shift-on").checked ? num("shift") : 0,
+      crossSection: RFEA.CROSS_SECTIONS[f.gas],
+      voltageShift: f["shift-on"] ? num("shift") : 0,
     };
   }
 
@@ -155,31 +189,31 @@
     runTimer = setTimeout(run, 120);
   }
 
+  // Panel changed (or a file was selected): re-analyse the current file with
+  // the panel settings. Changing the settings of a reviewed file reopens it.
   function run() {
     syncControls();
     saveForm();
-    if (!state.data) return;
-    let params;
-    try {
-      params = readParams();
-    } catch (e) {
-      setStatus(e.message, true);
-      return;
+    const f = cur();
+    if (!f) return;
+    const form = readForm();
+    let reopened = false;
+    if (JSON.stringify(form) !== JSON.stringify(f.form)) {
+      f.form = form;
+      f.edited = true;
+      if (f.review.status !== "pending") {
+        f.review = { status: "pending", note: f.review.note };
+        reopened = true;
+      }
+      saveReview(f);
     }
     const t0 = performance.now();
-    let r;
-    try {
-      r = RFEA.fullAnalysis(state.data, params);
-    } catch (e) {
-      setStatus(`Analysis failed: ${e.message}`, true);
-      return;
-    }
-    state.result = r;
-    state.params = params;
-    renderResults(r);
-    renderPlot();
-    ["btn-export-csv", "btn-export-png", "btn-export-svg"].forEach((id) => ($(id).disabled = false));
-    setStatus(`${state.fileName} · ${r.nTraces} traces averaged · analysed in ${(performance.now() - t0).toFixed(0)} ms`);
+    analyseFile(f, true);
+    showCurrent();
+    renderBatch();
+    if (f.error) return;
+    setStatus(`${f.name} · ${f.result.nTraces} traces averaged · analysed in ${(performance.now() - t0).toFixed(0)} ms` +
+      (reopened ? " · settings changed, review reopened" : ""));
   }
 
   const UNITS = {
@@ -189,6 +223,10 @@
   function renderResults(r) {
     document.querySelectorAll("#results dd").forEach((dd) => {
       const k = dd.dataset.k;
+      if (!r) {
+        dd.textContent = "—";
+        return;
+      }
       const v = r[k];
       if (k === "tauRatio" && (v === null || !Number.isFinite(v))) dd.textContent = "N/A";
       // Semion works out the ion flux only on CSV export; .sdf files do not store it
@@ -284,11 +322,11 @@
     ], layout, PLOT_CONFIG);
   }
 
-  function renderEmptyPlot() {
+  function renderEmptyPlot(message) {
     const c = colors();
     const layout = baseLayout(c);
     layout.annotations = [{
-      text: "Open a .csv or .sdf file to see the I–V curve and IEDF", showarrow: false,
+      text: message || "Open .csv or .sdf files to see the I–V curve and IEDF", showarrow: false,
       xref: "paper", yref: "paper", x: 0.5, y: 0.5, font: { color: c.textLo, size: 14 },
     }];
     layout.xaxis.showgrid = layout.yaxis.showgrid = false;
@@ -297,20 +335,30 @@
   }
 
   // ---------------- File loading ----------------
-  async function loadFile(file) {
-    if (!file) return;
-    try {
-      state.data = await file.arrayBuffer();
-    } catch (e) {
-      setStatus(`Could not read ${file.name}: ${e.message}`, true);
+  async function loadFiles(list) {
+    const all = Array.from(list || []);
+    const files = all.length > 1 ? all.filter((f) => /\.(csv|sdf)$/i.test(f.name)) : all;
+    if (!files.length) {
+      if (all.length) setStatus("No .csv or .sdf files among the dropped files.", true);
       return;
     }
-    state.fileName = file.name;
-    $("file-name").textContent = `${file.name} (${(file.size / 1024).toFixed(0)} kB) — read locally, not uploaded.`;
-    run();
+    const read = [];
+    for (const file of files) {
+      try {
+        read.push({ name: file.name, size: file.size, data: await file.arrayBuffer() });
+      } catch (e) {
+        setStatus(`Could not read ${file.name}: ${e.message}`, true);
+      }
+    }
+    if (read.length) await addFiles(read);
+    const skipped = all.length - files.length;
+    if (skipped > 0) setStatus(`${$("status").textContent} · ${skipped} other file${skipped === 1 ? "" : "s"} skipped`);
   }
 
-  $("file").addEventListener("change", (e) => loadFile(e.target.files[0]));
+  $("file").addEventListener("change", (e) => {
+    loadFiles(e.target.files);
+    e.target.value = ""; // allow opening the same file again
+  });
   const drop = $("drop");
   ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
     e.preventDefault();
@@ -319,14 +367,464 @@
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
   drop.addEventListener("drop", (e) => {
     e.preventDefault();
-    loadFile(e.dataTransfer.files[0]);
+    loadFiles(e.dataTransfer.files);
   });
   // Dropping anywhere else should not navigate away from the app
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => {
     e.preventDefault();
-    if (e.dataTransfer && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer && e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
   });
+
+  // ---------------- Batch, automatic review, human review ----------------
+  // Every opened file is analysed with its own copy of the settings: the
+  // panel at the time it was opened, plus pressure / gas / f_rf read from its
+  // name. assessQuality() flags it OK, Check or Must review; a person can then
+  // change its settings and approve or reject it. Decisions are remembered in
+  // this browser (per file name and size) and go into the summary CSV.
+  const REVIEW_KEY = "rfea-reviews-v1";
+  const AUTO_KEY = "rfea-auto-review-v1";
+  const AUTO_IDS = ["auto-names", "snr-review", "snr-check"];
+  const FLAG_SHORT = {
+    "weak-signal": "Weak signal", noisy: "Noisy", "no-peak": "No peak", "peak-edge": "Peak at sweep end",
+    "peak-negative": "Peak ≤ 0 eV", "eavg-negative": "E_avg ≤ 0", "iedf-noise": "IEDF mostly noise",
+    "iedf-negative": "Negative IEDF", "traces-disagree": "Traces disagree", "few-traces": "Few traces",
+    "no-pressure": "Pressure not in name", inverted: "Inverted current", error: "Analysis failed",
+  };
+  const LEVEL_TEXT = { ok: "OK", check: "Check", review: "Must review", error: "Error" };
+
+  function loadReviews() {
+    try { return JSON.parse(store.get(REVIEW_KEY) || "{}") || {}; } catch (e) { return {}; }
+  }
+  const reviewKey = (f) => `${f.name}|${f.size}`;
+  function saveReview(f) {
+    const all = loadReviews();
+    if (f.review.status === "pending" && !f.review.note && !f.edited) delete all[reviewKey(f)];
+    else all[reviewKey(f)] = { ...f.review, form: f.edited ? f.form : null };
+    store.set(REVIEW_KEY, JSON.stringify(all));
+  }
+
+  function autoSettings() {
+    const n = (id, d) => {
+      const v = Number($(id).value);
+      return $(id).value.trim() !== "" && Number.isFinite(v) ? v : d;
+    };
+    return {
+      names: $("auto-names").checked,
+      snrReview: n("snr-review", RFEA.QUALITY_DEFAULTS.snrReview),
+      snrCheck: n("snr-check", RFEA.QUALITY_DEFAULTS.snrCheck),
+    };
+  }
+
+  // Panel settings for a file, with the settings found in its name on top
+  function formForFile(name, base) {
+    const form = { ...base, manualRanges: (base.manualRanges || []).map((r) => ({ ...r })) };
+    const auto = autoSettings().names ? RFEA.parseFileName(name) : {};
+    const used = {};
+    if (auto.pressure !== undefined) { form.pressure = String(auto.pressure); used.pressure = auto.pressure; }
+    if (auto.fRfMHz !== undefined) { form.frf = String(auto.fRfMHz); used.fRfMHz = auto.fRfMHz; }
+    if (auto.species) {
+      // Keep the chosen cross-section when the panel already has this gas (Ar kinetic)
+      if (!String(form.gas).startsWith(auto.species)) form.gas = auto.gas;
+      form.mi = String(auto.Mi);
+      used.species = auto.species;
+    }
+    return { form, auto: used };
+  }
+
+  function analyseFile(f, mark = false) {
+    f.error = null;
+    try {
+      f.params = paramsFromForm(f.form, mark);
+      f.result = RFEA.fullAnalysis(f.data, f.params);
+    } catch (e) {
+      f.result = null;
+      f.error = e.message;
+    }
+    assessFile(f);
+  }
+
+  function assessFile(f) {
+    if (!f.result) {
+      f.quality = { level: "error", flags: [{ level: "review", code: "error", message: f.error }], metrics: {} };
+      return;
+    }
+    const a = autoSettings();
+    const q = RFEA.assessQuality(f.result, { snrReview: a.snrReview, snrCheck: a.snrCheck });
+    if (a.names && f.auto.pressure === undefined && !f.edited) {
+      q.flags.push({ level: "check", code: "no-pressure", message: `Pressure not found in the file name; the panel value (${f.form.pressure} Pa) is used.` });
+      if (q.level === "ok") q.level = "check";
+    }
+    f.quality = q;
+  }
+
+  // Overall state of a file for the table and filters
+  function statusOf(f) {
+    if (f.review.status === "approved") return "approved";
+    if (f.review.status === "rejected") return "rejected";
+    return f.quality ? f.quality.level : "pending";
+  }
+  const needsLook = (f) => f.review.status === "pending" && f.quality && f.quality.level !== "ok";
+  function statusText(f) {
+    const st = statusOf(f);
+    if (st === "approved") return f.review.mode === "bulk" ? "Approved (bulk)" : "Approved";
+    if (st === "rejected") return "Rejected";
+    return LEVEL_TEXT[st] || "…";
+  }
+
+  // Flag messages are fixed text plus numbers; only <sub> markup is kept
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const flagHtml = (m) => esc(m).replace(/&lt;(\/?)sub&gt;/g, "<$1sub>");
+  const flagText = (m) => String(m).replace(/<\/?sub>/g, "");
+
+  async function addFiles(list) {
+    const reviews = loadReviews();
+    const base = readForm();
+    let first = -1;
+    for (const item of list) {
+      let idx = state.files.findIndex((f) => f.name === item.name && f.size === item.size);
+      const { form, auto } = formForFile(item.name, base);
+      const saved = reviews[`${item.name}|${item.size}`];
+      const f = {
+        name: item.name, size: item.size, data: item.data, auto,
+        form: saved && saved.form ? saved.form : form,
+        edited: Boolean(saved && saved.form),
+        review: saved ? { status: saved.status || "pending", note: saved.note || "", at: saved.at, mode: saved.mode } : { status: "pending", note: "" },
+        result: null, quality: null, error: null,
+      };
+      if (idx >= 0) state.files[idx] = f;
+      else idx = state.files.push(f) - 1;
+      if (first < 0) first = idx;
+    }
+    // Analyse in small steps so the page stays responsive on big batches
+    const pending = state.files.filter((f) => !f.quality);
+    for (let i = 0; i < pending.length; i++) {
+      analyseFile(pending[i]);
+      if (pending.length > 1 && i % 4 === 3) {
+        setStatus(`Analysing ${i + 1} / ${pending.length}…`);
+        renderBatch();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    if (list.length > 1) setView("batch");
+    selectFile(first, list.length > 1);
+    const sum = summary();
+    setStatus(list.length > 1
+      ? `${list.length} files analysed · ${sum.review} must review · ${sum.check} to check · ${sum.ok} OK`
+      : $("status").textContent);
+  }
+
+  function selectFile(i, quiet = false) {
+    if (i < 0 || i >= state.files.length) return;
+    state.current = i;
+    const f = cur();
+    setForm(f.form);
+    $("file-name").textContent = `${f.name} (${(f.size / 1024).toFixed(0)} kB) — read locally, not uploaded.`;
+    if (quiet) {
+      // Already analysed by addFiles; only draw it
+      if (!f.error) paramsFromForm(f.form, true);
+      showCurrent();
+      renderBatch();
+    } else run();
+  }
+
+  function showCurrent() {
+    const f = cur();
+    const exportIds = ["btn-export-csv", "btn-export-png", "btn-export-svg"];
+    if (!f) {
+      $("review-bar").hidden = true;
+      state.result = null;
+      renderResults(null);
+      renderEmptyPlot();
+      exportIds.forEach((id) => ($(id).disabled = true));
+      return;
+    }
+    state.result = f.result;
+    state.params = f.params;
+    renderResults(f.result);
+    if (f.result) renderPlot();
+    else {
+      renderEmptyPlot(`${f.name}: analysis failed`);
+      setStatus(`${f.name}: ${f.error}`, true);
+    }
+    exportIds.forEach((id) => ($(id).disabled = !f.result));
+    renderReviewBar();
+  }
+
+  function renderReviewBar() {
+    const f = cur();
+    const bar = $("review-bar");
+    bar.hidden = !f;
+    if (!f) return;
+    const st = statusOf(f);
+    bar.className = `review-bar ${st}`;
+    $("review-pos").textContent = `${state.current + 1} / ${state.files.length}`;
+    $("review-name").textContent = f.name;
+    const pill = $("review-pill");
+    pill.className = `pill ${st}`;
+    pill.textContent = statusText(f);
+    if (f.review.status !== "pending" && f.quality && f.quality.level !== "ok") {
+      pill.title = `Automatic check: ${LEVEL_TEXT[f.quality.level]}`;
+    } else pill.title = "";
+    $("review-edited").hidden = !f.edited;
+    const ul = $("review-flags");
+    ul.textContent = "";
+    const flags = f.quality ? f.quality.flags : [];
+    for (const fl of flags) {
+      const li = document.createElement("li");
+      li.className = fl.level;
+      li.innerHTML = flagHtml(fl.message);
+      ul.appendChild(li);
+    }
+    if (f.quality && !flags.length) {
+      const li = document.createElement("li");
+      li.className = "ok";
+      li.textContent = `No problems found (SNR ${fmtG(f.quality.metrics.snr, 3)}).`;
+      ul.appendChild(li);
+    }
+    if (document.activeElement !== $("review-note")) $("review-note").value = f.review.note || "";
+    $("btn-approve").textContent = f.review.status === "approved" ? "Approved ✓" : "Approve";
+    $("btn-reject").textContent = f.review.status === "rejected" ? "Rejected" : "Reject";
+    $("btn-approve").disabled = !f.result;
+    $("btn-prev").disabled = state.current <= 0;
+    $("btn-next").disabled = state.current >= state.files.length - 1;
+    $("btn-next-flagged").disabled = !state.files.some((g, i) => i !== state.current && needsLook(g));
+    $("btn-apply-all").hidden = state.files.length < 2;
+  }
+
+  function summary() {
+    const s = { total: state.files.length, review: 0, check: 0, ok: 0, error: 0, approved: 0, rejected: 0, todo: 0 };
+    for (const f of state.files) {
+      const st = statusOf(f);
+      if (st in s) s[st]++;
+      if (needsLook(f)) s.todo++;
+    }
+    s.review += s.error;
+    return s;
+  }
+
+  function matchesFilter(f, filter) {
+    const st = statusOf(f);
+    if (filter === "all") return true;
+    if (filter === "todo") return needsLook(f);
+    if (filter === "review") return st === "review" || st === "error";
+    return st === filter;
+  }
+
+  function renderBatch() {
+    const sum = summary();
+    $("batch-count").textContent = sum.total ? String(sum.todo || sum.total) : "";
+    $("batch-count").title = sum.todo ? `${sum.todo} to review` : "";
+    $("batch-summary").textContent = sum.total
+      ? `${sum.total} file${sum.total === 1 ? "" : "s"} · ${sum.review} must review · ${sum.check} check · ${sum.ok} OK · ${sum.approved} approved · ${sum.rejected} rejected`
+      : "";
+    $("batch-empty").hidden = sum.total > 0;
+    ["btn-approve-ok", "btn-export-summary", "btn-clear"].forEach((id) => ($(id).disabled = !sum.total));
+    $("btn-approve-ok").disabled = !state.files.some((f) => f.review.status === "pending" && f.quality && f.quality.level === "ok");
+    const body = $("batch-body");
+    body.textContent = "";
+    const filter = $("batch-filter").value;
+    state.files.forEach((f, i) => {
+      if (!matchesFilter(f, filter)) return;
+      const tr = document.createElement("tr");
+      if (i === state.current) tr.className = "current";
+      tr.tabIndex = 0;
+      tr.addEventListener("click", () => {
+        selectFile(i);
+        setView("plot");
+      });
+      tr.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") tr.click();
+      });
+      const td = (text, cls) => {
+        const c = document.createElement("td");
+        if (cls) c.className = cls;
+        if (text instanceof Node) c.appendChild(text);
+        else c.textContent = text;
+        tr.appendChild(c);
+        return c;
+      };
+      const r = f.result;
+      const fx = (v, d = 4) => (r && Number.isFinite(v) ? fmtG(v, d) : "—");
+      td(String(i + 1), "num");
+      td(f.name, "file").title = f.edited ? "Own settings for this file" : "";
+      const pill = document.createElement("span");
+      pill.className = `pill ${statusOf(f)}`;
+      pill.textContent = statusText(f);
+      td(pill);
+      const flags = f.quality ? f.quality.flags : [];
+      const short = flags.map((fl) => FLAG_SHORT[fl.code] || fl.code);
+      const ft = td(short.length ? short.join(" · ") : "—", "flagtext");
+      ft.title = flags.map((fl) => flagText(fl.message)).join("\n");
+      td(fx(r && r.Eavg), "num");
+      td(fx(r && r.Epeak), "num");
+      td(fx(r && r.flux, 3), "num");
+      td(f.quality && f.quality.metrics.snr !== undefined ? fmtG(f.quality.metrics.snr, 3) : "—", "num");
+      td(String(f.form.pressure) + (f.auto.pressure !== undefined && !f.edited ? "" : " *"), "num").title =
+        f.auto.pressure !== undefined && !f.edited ? "From the file name" : "From the panel or edited";
+      td(f.form.gas, "gas");
+      td(String(f.form.frf), "num");
+      td(f.review.note || "", "note");
+      body.appendChild(tr);
+    });
+  }
+
+  function setView(name) {
+    document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === name)));
+    $("view-plot").hidden = name !== "plot";
+    $("view-batch").hidden = name !== "batch";
+    if (name === "plot") Plotly.Plots.resize(plotEl);
+    else renderBatch();
+  }
+
+  function nextFlagged() {
+    const n = state.files.length;
+    for (let k = 1; k <= n; k++) {
+      const i = (state.current + k) % n;
+      if (needsLook(state.files[i])) return i;
+    }
+    return -1;
+  }
+
+  function decide(status) {
+    const f = cur();
+    if (!f) return;
+    f.review = { status, note: $("review-note").value.trim(), at: new Date().toISOString(), mode: "manual" };
+    saveReview(f);
+    const next = nextFlagged();
+    renderBatch();
+    if (next >= 0) {
+      selectFile(next);
+      setStatus(`${status === "approved" ? "Approved" : "Rejected"} ${f.name} · next to review: ${cur().name}`);
+    } else {
+      renderReviewBar();
+      setStatus(`${status === "approved" ? "Approved" : "Rejected"} ${f.name} · nothing left to review`);
+    }
+  }
+
+  function exportSummary() {
+    const cols = ["file", "status", "automatic_check", "flags", "flag_messages", "review_note", "reviewed_at",
+      "Eavg_eV", "Epeak_eV", "flux", "ni", "tau_ratio", "electrode_voltage_V", "ion_flux_file", "n_traces",
+      "snr", "negative_iedf_ratio", "trace_spread", "pressure_Pa", "gas", "Mi_u", "f_rf_MHz", "Vp_V", "Te_eV", "alpha",
+      "method", "smoothing", "dIdE_smoothing_eV", "voltage_shift_V", "settings"];
+    const q = (v) => {
+      const t = v === null || v === undefined || (typeof v === "number" && !Number.isFinite(v)) ? "" : String(v);
+      return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    };
+    const rows = [cols.join(",")];
+    for (const f of state.files) {
+      const r = f.result || {};
+      const m = (f.quality && f.quality.metrics) || {};
+      const fm = f.form;
+      const smoothing = { Recursive: `±${fm["rec-window"]} eV`, Mavg: `${fm["mavg-window"]} pts`, SG: `order ${fm["sg-poly"]}, ${fm["sg-window"]} pts`,
+        Manual: (fm.manualRanges || []).map((x) => `[${fmtG(x.xmin, 4)};${fmtG(x.xmax, 4)}] w=${x.window}`).join(" ") }[fm.method];
+      rows.push([
+        f.name, statusText(f), f.quality ? LEVEL_TEXT[f.quality.level] : "",
+        (f.quality ? f.quality.flags : []).map((x) => x.code).join(" "),
+        (f.quality ? f.quality.flags : []).map((x) => flagText(x.message)).join(" | "),
+        f.review.note, f.review.status !== "pending" ? f.review.at : "",
+        r.Eavg, r.Epeak, r.flux, r.ni, r.tauRatio, r.electrodeVoltage, r.ionFlux, r.nTraces,
+        m.snr, m.negRatio, m.traceSpread,
+        fm.pressure, fm.gas, fm.mi, fm.frf, fm.vp, fm.te, fm.alpha,
+        fm.method, smoothing, fm["smooth-didv"], fm["shift-on"] ? fm.shift : 0,
+        f.edited ? "edited for this file" : Object.keys(f.auto).length ? `panel + file name (${Object.keys(f.auto).join(", ")})` : "panel",
+      ].map(q).join(","));
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    download(`rfea_batch_summary_${stamp}.csv`, new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
+    const left = summary().todo;
+    if (left) setStatus(`Summary exported · ${left} file${left === 1 ? " still needs" : "s still need"} review`);
+  }
+
+  function applySettingsToAll() {
+    const f = cur();
+    if (!f) return;
+    const base = readForm();
+    let n = 0;
+    for (const g of state.files) {
+      if (g === f || g.review.status !== "pending") continue;
+      const { form, auto } = formForFile(g.name, base);
+      g.form = form;
+      g.auto = auto;
+      g.edited = false;
+      saveReview(g);
+      analyseFile(g);
+      n++;
+    }
+    renderBatch();
+    renderReviewBar();
+    setStatus(`Settings copied to ${n} file${n === 1 ? "" : "s"} not yet reviewed (file-name settings still apply)`);
+  }
+
+  // Wiring
+  document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  $("btn-prev").addEventListener("click", () => selectFile(state.current - 1));
+  $("btn-next").addEventListener("click", () => selectFile(state.current + 1));
+  $("btn-next-flagged").addEventListener("click", () => {
+    const i = nextFlagged();
+    if (i >= 0) selectFile(i);
+  });
+  $("btn-approve").addEventListener("click", () => decide("approved"));
+  $("btn-reject").addEventListener("click", () => decide("rejected"));
+  $("review-note").addEventListener("change", () => {
+    const f = cur();
+    if (!f) return;
+    f.review.note = $("review-note").value.trim();
+    saveReview(f);
+    renderBatch();
+  });
+  $("btn-apply-all").addEventListener("click", applySettingsToAll);
+  $("batch-filter").addEventListener("change", renderBatch);
+  $("btn-approve-ok").addEventListener("click", () => {
+    const at = new Date().toISOString();
+    let n = 0;
+    for (const f of state.files) {
+      if (f.review.status === "pending" && f.quality && f.quality.level === "ok") {
+        f.review = { status: "approved", note: f.review.note, at, mode: "bulk" };
+        saveReview(f);
+        n++;
+      }
+    }
+    renderBatch();
+    renderReviewBar();
+    setStatus(`Approved ${n} file${n === 1 ? "" : "s"} without flags`);
+  });
+  $("btn-export-summary").addEventListener("click", exportSummary);
+  $("btn-clear").addEventListener("click", () => {
+    if (!confirm(`Remove all ${state.files.length} files from the list? Review decisions stay saved in this browser.`)) return;
+    state.files = [];
+    state.current = -1;
+    showCurrent();
+    renderBatch();
+    $("file-name").textContent = "No file selected. Files are read in your browser and never uploaded.";
+    setStatus("List cleared");
+  });
+
+  function saveAuto() {
+    const data = {};
+    for (const id of AUTO_IDS) data[id] = $(id).type === "checkbox" ? $(id).checked : $(id).value;
+    store.set(AUTO_KEY, JSON.stringify(data));
+  }
+  (function restoreAuto() {
+    let data = null;
+    try { data = JSON.parse(store.get(AUTO_KEY) || "null"); } catch (e) { data = null; }
+    if (!data) return;
+    for (const id of AUTO_IDS) {
+      if (!(id in data)) continue;
+      if ($(id).type === "checkbox") $(id).checked = Boolean(data[id]);
+      else $(id).value = data[id];
+    }
+  })();
+  // Thresholds re-check every file; the file-name option applies to files opened next
+  for (const id of ["snr-review", "snr-check"]) {
+    $(id).addEventListener("input", () => {
+      saveAuto();
+      state.files.forEach(assessFile);
+      renderBatch();
+      renderReviewBar();
+    });
+  }
+  $("auto-names").addEventListener("change", saveAuto);
 
   // ---------------- Exports ----------------
   // Inside claude.ai the page cannot start downloads itself; the viewer's
@@ -368,7 +866,7 @@
   }
 
   function baseName() {
-    return (state.fileName || "rfea").replace(/\.[^.]+$/, "");
+    return (cur() ? cur().name : "rfea").replace(/\.[^.]+$/, "");
   }
 
   async function exportImage(format) {
@@ -408,13 +906,13 @@
   let rawIV = null;
 
   function openManual() {
-    if (!state.data) {
+    if (!cur()) {
       setStatus("Open a .csv or .sdf file first.", true);
       return;
     }
     try {
       const shift = $("shift-on").checked ? num("shift") : 0;
-      const { table } = RFEA.importFile(state.data);
+      const { table } = RFEA.importFile(cur().data);
       const avg = RFEA.traceAverageAndSmooth(RFEA.separateTraces(table), 10, shift);
       rawIV = { V: Array.from(avg.Vavg), I: Array.from(avg.Iavg) };
     } catch (e) {
@@ -567,8 +1065,20 @@
   // ---------------- What's new ----------------
   // Newest first. With every release add an entry, bump APP_VERSION and set the
   // same version in sw.js (VERSION = "rfea-<APP_VERSION>").
-  const APP_VERSION = "2.2.0";
+  const APP_VERSION = "2.3.0";
   const CHANGELOG = [
+    {
+      version: "2.3.0",
+      date: "2026-11-04",
+      title: "Batch analysis with review",
+      items: [
+        "Open or drop many .csv / .sdf files at once. Each one is analysed automatically and listed in the new Batch view.",
+        "Pressure, gas and f<sub>rf</sub> are read from file names such as 25W10PaAr60MHz (13 MHz means 13.56 MHz). This can be turned off.",
+        "Automatic checks mark every file OK, Check or Must review and say why: weak or noisy signal, E<sub>peak</sub> at the end of the sweep or ≤ 0 eV, E<sub>avg</sub> ≤ 0 eV, IEDF mostly noise, traces that disagree.",
+        "Review each file in the Plot view: change its settings for that file only, add a note, then Approve or Reject. Next flagged jumps to the next file that needs a look.",
+        "Export summary CSV lists every file with its results, flags, review decision and settings. Decisions are remembered in this browser.",
+      ],
+    },
     {
       version: "2.2.0",
       date: "2026-11-04",
@@ -692,7 +1202,7 @@
   // Installed app opened with a .csv or .sdf ("Open with" / double-click on desktop)
   if ("launchQueue" in window) {
     window.launchQueue.setConsumer(async (params) => {
-      if (params.files && params.files.length) loadFile(await params.files[0].getFile());
+      if (params.files && params.files.length) loadFiles(await Promise.all(params.files.map((h) => h.getFile())));
     });
   }
 

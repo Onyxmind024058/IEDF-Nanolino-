@@ -24,7 +24,8 @@ normal program. It then has its own window and icon, and works without internet.
 New versions are picked up automatically: the app updates itself in the
 background and shows the new version the next time it is opened.
 
-Then open a Semion CSV export or `.sdf` scan file (button or drag and drop).
+Then open a Semion CSV export or `.sdf` scan file (button or drag and drop), or
+several at once for a batch with automatic checks and review (see the main README).
 For `.sdf` files the imported ion flux shows as n/a (Semion does not store it
 in the file). Results and plots
 update as you change parameters. The theme (University of Basel light/dark) and
@@ -71,4 +72,8 @@ With `pipeline: "legacy"` the JavaScript results match the Python ones to about
 methods against synthetic data with a known IEDF. `web/tests/browser-check.cjs` drives the page in Chromium with
 Playwright (load, smoothing methods, manual ranges, exports, themes, phone width);
 `web/tests/pwa-check.cjs` serves the app over HTTP and checks installability and
-that it starts and analyses a file offline.
+that it starts and analyses a file offline. `web/tests/quality-check.mjs` checks the
+automatic review flags and file-name parsing on synthetic data;
+`web/tests/batch-check.cjs <outdir> <files…>` drives a batch in Chromium (rating,
+per-file settings, approve / reject, summary CSV, restore after reload, phone width).
+Pass it at least one file that is rated OK and one that gets flagged.

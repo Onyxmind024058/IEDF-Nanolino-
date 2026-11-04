@@ -714,8 +714,139 @@ function fullAnalysis(text, p) {
     Vavg,
     tauRatio,
     nTraces: traces.V.length,
+    traces,
   };
 }
 
-globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis };
+// ------------------------------------------------------------------
+// Automatic quality review
+// ------------------------------------------------------------------
+// Default thresholds; the app lets the user change the two SNR limits.
+const QUALITY_DEFAULTS = {
+  snrReview: 5, // I–V step / noise below this: must review
+  snrCheck: 15, // below this: check
+  negReview: 0.75, // negative / positive IEDF area above this: must review
+  negCheck: 0.5,
+  edgeEV: 2, // E_peak this close to either end of the sweep: must review
+  spreadCheck: 0.5, // step varies between traces by more than this fraction: check
+  minTraces: 3,
+};
+
+const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
+
+// Robust noise of a curve: median absolute point-to-point change (white noise -> sigma)
+function noiseSigma(y) {
+  const d = [];
+  for (let i = 1; i < y.length; i++) if (Number.isFinite(y[i]) && Number.isFinite(y[i - 1])) d.push(Math.abs(y[i] - y[i - 1]));
+  if (!d.length) return NaN;
+  d.sort((a, b) => a - b);
+  return d[d.length >> 1] / 0.6745 / Math.SQRT2;
+}
+
+// Change of current across the sweep: mean of the last 10 % minus the first 10 %
+function ivStep(I) {
+  const k = Math.max(3, Math.floor(I.length * 0.1));
+  return mean(Array.from(I.slice(-k))) - mean(Array.from(I.slice(0, k)));
+}
+
+// Measures and flags for one analysed file. Each flag is
+// { level: "review" | "check", code, message }; "review" means a person must
+// look at the file before its results are used.
+function assessQuality(r, opts = {}) {
+  const o = { ...QUALITY_DEFAULTS, ...opts };
+  const flags = [];
+  const add = (level, code, message) => flags.push({ level, code, message });
+  const f1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : String(v));
+
+  const I = Array.from(r.Iavg);
+  const V = Array.from(r.Vavg);
+  const noise = noiseSigma(I);
+  const step = ivStep(I);
+  const snr = noise > 0 ? Math.abs(step) / noise : Infinity;
+
+  let pos = 0;
+  let neg = 0;
+  for (const v of r.dIdE) {
+    if (v > 0) pos += v;
+    else if (v < 0) neg -= v;
+  }
+  const negRatio = pos > 0 ? neg / pos : Infinity;
+
+  let spread = 0;
+  const steps = r.traces ? r.traces.I.map((t) => ivStep(t)) : [];
+  if (steps.length >= 2) {
+    const m = mean(steps);
+    const sd = Math.sqrt(mean(steps.map((s) => (s - m) ** 2)));
+    spread = m !== 0 ? sd / Math.abs(m) : Infinity;
+  }
+
+  const vMin = Math.min(...V);
+  const vMax = Math.max(...V);
+
+  if (!(snr >= o.snrReview)) {
+    add("review", "weak-signal", `Weak ion signal: the I–V step is ${f1(snr)}× the noise (at least ${o.snrReview}× expected).`);
+  } else if (snr < o.snrCheck) {
+    add("check", "noisy", `Noisy: the I–V step is ${f1(snr)}× the noise (below ${o.snrCheck}×).`);
+  }
+  if (!Number.isFinite(r.Epeak)) {
+    add("review", "no-peak", "No E<sub>peak</sub> found.");
+  } else if (r.Epeak - vMin < o.edgeEV || vMax - r.Epeak < o.edgeEV) {
+    add("review", "peak-edge", `E<sub>peak</sub> (${f1(r.Epeak)} eV) is at the end of the voltage sweep.`);
+  } else if (r.Epeak <= 0) {
+    add("review", "peak-negative", `E<sub>peak</sub> is at or below 0 eV (${f1(r.Epeak)} eV).`);
+  }
+  if (!(r.Eavg > 0)) add("review", "eavg-negative", `E<sub>avg</sub> is not positive (${f1(r.Eavg)} eV).`);
+  // Semion records the ion current as negative, rising towards 0 as the
+  // discriminator voltage goes up. A clear step the other way gives a negative IEDF.
+  const inverted = step < 0 && snr >= o.snrReview;
+  if (inverted) {
+    add("review", "inverted", "The current falls with voltage, so the IEDF comes out negative. Is the current sign inverted?");
+  } else if (!(negRatio <= o.negReview)) {
+    add("review", "iedf-noise", `IEDF is mostly noise: its negative area is ${Number.isFinite(negRatio) ? Math.round(negRatio * 100) + " %" : "larger than"} of the positive area.`);
+  } else if (negRatio > o.negCheck) {
+    add("check", "iedf-negative", `Large negative IEDF parts: ${Math.round(negRatio * 100)} % of the positive area.`);
+  }
+  if (spread > o.spreadCheck) {
+    add("check", "traces-disagree", `Traces disagree: the I–V step varies by ${Number.isFinite(spread) ? Math.round(spread * 100) + " %" : "a lot"} between traces.`);
+  }
+  if (r.nTraces < o.minTraces) add("check", "few-traces", `Only ${r.nTraces} trace${r.nTraces === 1 ? "" : "s"} averaged.`);
+
+  const level = flags.some((f) => f.level === "review") ? "review" : flags.length ? "check" : "ok";
+  return { level, flags, metrics: { snr, noise, step, negRatio, traceSpread: spread } };
+}
+
+// ------------------------------------------------------------------
+// Settings from Semion file names, e.g. 20240618_21_25W10PaAr60MHz
+// ------------------------------------------------------------------
+const GASES = {
+  Ar: { Mi: 40, gas: "Ar Impedans" },
+  He: { Mi: 4, gas: "He Impedans" },
+};
+// Nominal ISM frequencies written in short form in file names
+const NOMINAL_MHZ = { 13: 13.56, 27: 27.12, 40: 40.68 };
+
+function parseFileName(name) {
+  const base = String(name).replace(/\.[^.]+$/, "");
+  const out = {};
+  const num = (s) => Number(s.replace(",", "."));
+  let m = base.match(/(\d+(?:[.,]\d+)?)\s*W(?![a-z])/);
+  if (m) out.powerW = num(m[1]);
+  m = base.match(/(\d+(?:[.,]\d+)?)\s*Pa(?![a-z])/);
+  if (m) out.pressure = num(m[1]);
+  m = base.match(/(\d+(?:[.,]\d+)?)\s*MHz/i);
+  if (m) {
+    const f = num(m[1]);
+    out.fRfMHz = NOMINAL_MHZ[f] ?? f;
+  }
+  m = base.match(/(?:^|[^A-Za-z])(Ar|He)(?![a-z])|Pa(Ar|He)(?![a-z])/);
+  if (m) {
+    const g = m[1] || m[2];
+    out.species = g;
+    out.Mi = GASES[g].Mi;
+    out.gas = GASES[g].gas;
+  }
+  return out;
+}
+
+globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis, assessQuality, QUALITY_DEFAULTS, parseFileName };
 })();

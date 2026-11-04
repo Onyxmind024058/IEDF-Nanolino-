@@ -110,6 +110,55 @@ CSV export to within its 6-digit rounding.
   a 15-trace scan: −9.32 mV instead of −8.97 mV). It is only displayed.
 - Only single-sensor scans are supported. Other files are refused with a message.
 
+### 4.4 Batch analysis and review (web app)
+
+Open or drop **several files at once** (button, drag and drop, or *Open with* on
+the installed app). Each file is analysed straight away and listed in the
+**Batch** view. The number on the Batch button counts the files still to review.
+
+**Settings per file.** Each file starts with the panel settings at the time it
+was opened. With *Read pressure, gas and f_rf from file names* on, these are
+read from Semion-style names such as `20240618_21_25W10PaAr60MHz`:
+
+| In the name | Sets |
+|---|---|
+| `10Pa`, `0,8Pa` | Pressure (Pa) |
+| `Ar`, `He` | Gas and M_i (Ar 40 u, He 4 u). *Ar kinetic* is kept if chosen. |
+| `13MHz`, `27MHz`, `40MHz`, `60MHz` | f_rf; 13/27/40 mean 13.56/27.12/40.68 MHz |
+
+A `*` after the pressure in the table means it came from the panel or was edited.
+
+**Automatic checks.** Every file is rated:
+
+| Rating | When |
+|---|---|
+| **Must review** (red) | I–V step below *Must review below SNR* × noise (default 5) · E_peak at either end of the sweep (within 2 eV) or ≤ 0 eV · E_avg ≤ 0 eV · negative IEDF area above 75 % of the positive area · current falling with voltage (inverted sign) · analysis failed |
+| **Check** (amber) | SNR below *Check below SNR* (default 15) · negative IEDF area above 50 % · the I–V step varies by more than 50 % between traces · fewer than 3 traces · pressure not in the file name |
+| **OK** | none of the above |
+
+SNR is the I–V step (mean current of the last 10 % of the sweep minus the first
+10 %) divided by the noise (robust estimate from point-to-point changes of the
+averaged curve). Changing the two SNR limits re-rates every file at once.
+
+**Reviewing.** Click a row to open the file in the **Plot** view. The bar above the
+plot lists its flags.
+
+- Change any panel setting: it applies to **this file only** (marked *own
+  settings*). Changing the settings of an approved or rejected file sets it back
+  to pending.
+- Add a note, then **Approve** or **Reject**. The app moves on to the next file
+  that needs a look; **Next flagged** jumps there directly.
+- **Use settings for all** copies the current settings to every file not yet
+  approved or rejected. Each still gets its file-name settings.
+- In the Batch view, **Approve all OK** approves every unflagged pending file in
+  one go (recorded as *Approved (bulk)*). **Show** filters the table.
+
+**Export summary CSV** writes one row per file: status, automatic rating, flags,
+note, review time, E_avg, E_peak, flux, n_i, τ ratio, electrode voltage, SNR and
+the settings used. Review decisions and per-file settings are remembered **in this
+browser only**, per file name and size. Opening the same files again restores
+them. Keep the summary CSV as the record.
+
 ---
 
 ## 5. Analysis Parameters
@@ -285,8 +334,8 @@ Click **“About”** to display:
 
 ## 11. Typical Workflow
 
-1. Open CSV file
-2. Verify I–V and IEDF shapes
+1. Open a file, or several for a batch
+2. Verify I–V and IEDF shapes (in a batch: work through the files marked *Must review*)
 3. Adjust smoothing parameters
 4. Set plasma/sheath parameters
 5. Check τᵢ / τ_rf value
