@@ -390,7 +390,8 @@ def iedf(
 
     corr_fac = ion_flux_pressure_correction(pressure, Flux_factor, collision_cross_section)
     dIdE = dIdE * corr_fac
-    flux = S * corr_fac
+    # S is a current (A) and corr_fac 1/m^2: divide by e for a particle flux (m^-2 s^-1)
+    flux = S * corr_fac / 1.602e-19
 
     v_Bohm = np.sqrt(Te * 1.602e-19 / (Mi * 1.66e-27))  # Te in eV -> J
     ni = flux / (0.6 * v_Bohm) if v_Bohm != 0 else np.nan

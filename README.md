@@ -154,8 +154,8 @@ plot lists its flags.
   one go (recorded as *Approved (bulk)*). **Show** filters the table.
 
 **Export summary CSV** writes one row per file: status, automatic rating, flags,
-note, review time, E_avg, E_peak, flux, n_i, τ ratio, electrode voltage, SNR and
-the settings used. Review decisions and per-file settings are remembered **in this
+note, review time, E_avg, E_peak, flux, n_i, τ ratio, electrode voltage, SNR, the
+double-peak and sheath values (7.1) and the settings used. Review decisions and per-file settings are remembered **in this
 browser only**, per file name and size. Opening the same files again restores
 them. Keep the summary CSV as the record.
 
@@ -267,12 +267,51 @@ These parameters are used to compute the **ion transit time to RF period ratio**
 The application computes and displays:
 
 - **Eavg** – Average ion energy (eV)
-- **Flux** – Ion flux (m⁻²·s⁻¹)
+- **Flux** – Ion flux (m⁻²·s⁻¹): integrated collector current per effective grid
+  area, divided by the elementary charge
 - **ni** – Ion density (m⁻³)
 - **Epeak** – Energy at IEDF maximum (eV)
 - **τᵢ / τ_rf** – Ion transit time to RF period ratio
+- **Double peak, ΔE, sheath width, mean free path** – see 7.1 (web app)
 - **Electrode voltage**
 - **Imported ion flux reference**
+
+> **Units fix (web app 2.4.0, also in the Python module).** Before this version the
+> flux was a current density (A/m²) shown as m⁻²·s⁻¹, so flux and nᵢ were about
+> 6×10¹⁸ times too small and τᵢ/τ_rf about 2.5×10⁹ times too large. Results from
+> earlier versions are not comparable for these three quantities.
+
+### 7.1 Double peak from sheath oscillation (web app)
+
+Ions crossing an RF-modulated sheath reach the electrode with energies spread
+between two peaks around the mean sheath voltage V̄s. The app reports:
+
+| Value | Meaning |
+|---|---|
+| **Double peak** | E_low / E_high: the two highest-energy IEDF peaks that stand at least 4 noise σ (of dI/dE, propagated from the I–V noise) and 15 % of the IEDF maximum above their surroundings, away from the sweep ends. *single* or *none* otherwise. |
+| **ΔE measured** | E_high − E_low; the tooltip gives the peak-height ratio low/high |
+| **ΔE theory** | ΔE = 8 V̄s / (3π ω s̄) · √(2e V̄s / M), with V̄s = V_p, ω = 2π f_rf and the Child-law width s̄ = α λ_D (V_p/T_e)^¾ (Benoit-Cattin & Bernard). Valid for τᵢ/τ_rf ≫ 1 and a collisionless sheath. |
+| **Sheath width** | s̄ from the model; *from ΔE* inverts the formula with the measured ΔE and V̄s = (E_low + E_high)/2 |
+| **Mean free path λᵢ** | 1/(N_g σ) from the pressure and the gas cross-section |
+
+The peaks are marked on the plot. Regimes: τᵢ/τ_rf ≥ 3 high-frequency (the formula
+applies), ≤ 0.3 low-frequency (ions follow the RF field, broad IEDF up to the peak
+sheath voltage), intermediate in between.
+
+Notes (grey, they do not change the rating) and flags:
+
+| | When |
+|---|---|
+| *Note* · double peak | Double peak found, with ΔE and the theory value |
+| *Note* · unresolved | High-frequency regime and predicted ΔE below the resolution (the larger of 2 voltage steps and the dI/dE smoothing width) |
+| *Note* · collisional | Sheath wider than one ion mean free path: low-energy peaks are likely charge exchange, and the double peak is washed out |
+| **Check** · ΔE ≠ theory | High-frequency, collisionless, and measured ΔE more than 2× away from theory |
+| **Check** · double peak missing | Not low-frequency, collisionless, predicted ΔE at least twice the resolution, SNR above the Check limit, but no double peak found |
+
+The model uses the panel values V_p, T_e and α, so ΔE theory and the sheath width
+are only as good as those inputs. Typical 5–10 Pa data is collisional and its
+predicted splitting (< 1 eV at 13.56 MHz) is too small to resolve; clear double peaks
+need low pressure (≲ 1 Pa), light ions or lower frequency.
 
 ---
 

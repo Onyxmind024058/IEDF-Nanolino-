@@ -29,7 +29,7 @@ const { chromium } = require("playwright");
   };
   const rows = () => page.$$eval("#batch-body tr", (trs) => trs.map((tr) => {
     const td = tr.querySelectorAll("td");
-    return { file: td[1].textContent, status: td[2].textContent, flags: td[3].textContent, p: td[8].textContent, gas: td[9].textContent, frf: td[10].textContent, note: td[11].textContent };
+    return { file: td[1].textContent, status: td[2].textContent, flags: td[3].textContent, dE: td[6].textContent, p: td[9].textContent, gas: td[10].textContent, frf: td[11].textContent, note: td[12].textContent };
   }));
 
   await page.goto(url);

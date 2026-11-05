@@ -218,7 +218,26 @@
 
   const UNITS = {
     Eavg: "eV", Epeak: "eV", flux: "m⁻² s⁻¹", ni: "m⁻³", tauRatio: "", electrodeVoltage: "V", ionFlux: "",
+    doublePair: "eV", dE: "eV", dETheory: "eV", sheathWidth: "mm", mfp: "mm",
   };
+
+  // Double-peak / sheath values shown in the results panel
+  function doubleValue(r, k) {
+    const dp = r.doublePeak;
+    if (!dp) return { text: "—" };
+    const m = dp.model;
+    if (k === "doublePair") return dp.found ? { text: `${fmtG(dp.Elow, 3)} / ${fmtG(dp.Ehigh, 3)}` } : { text: dp.peaks.length ? "single" : "none", unit: "" };
+    if (k === "dE") return dp.found ? { text: fmtG(dp.dE, 3), title: `Peak height ratio low/high: ${fmtG(dp.heightRatio, 3)}` } : { text: "—", unit: "" };
+    if (k === "dETheory") return { text: fmtG(m.dETheory, 2), title: `${m.regime} regime; resolution ${fmtG(dp.resolution, 2)} eV` };
+    if (k === "sheathWidth") {
+      const fromSplit = dp.found && Number.isFinite(dp.sheathFromSplit) ? ` · from ΔE ${fmtG(dp.sheathFromSplit * 1e3, 3)}` : "";
+      return { text: fmtG(m.sheathWidth * 1e3, 3) + fromSplit, title: "Child-law sheath width from V_p, T_e, α and n_i; 'from ΔE' inverts the measured splitting" };
+    }
+    if (k === "mfp") return { text: fmtG(m.mfp * 1e3, 3), title: Number.isFinite(m.sOverMfp) ? `Sheath width / mean free path = ${fmtG(m.sOverMfp, 2)}` : "" };
+    return { text: "—" };
+  }
+
+  const DOUBLE_KEYS = { doublePair: 1, dE: 1, dETheory: 1, sheathWidth: 1, mfp: 1 };
 
   function renderResults(r) {
     document.querySelectorAll("#results dd").forEach((dd) => {
@@ -228,7 +247,13 @@
         return;
       }
       const v = r[k];
-      if (k === "tauRatio" && (v === null || !Number.isFinite(v))) dd.textContent = "N/A";
+      dd.title = "";
+      if (k in DOUBLE_KEYS) {
+        const d = doubleValue(r, k);
+        dd.textContent = d.text;
+        dd.title = d.title || "";
+        if (d.unit === "") return;
+      } else if (k === "tauRatio" && (v === null || !Number.isFinite(v))) dd.textContent = "N/A";
       // Semion works out the ion flux only on CSV export; .sdf files do not store it
       else if (k === "ionFlux" && Number.isNaN(v)) dd.textContent = "n/a (.sdf)";
       else dd.textContent = fmtG(v);
@@ -312,6 +337,20 @@
       }));
     }
 
+    // Double peak: dashed markers at both peak energies
+    const dp = r.doublePeak;
+    if (dp && dp.found) {
+      layout.shapes = (layout.shapes || []).concat([dp.Elow, dp.Ehigh].map((x) => ({
+        type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1,
+        line: { color: c.iedf, width: 1.5, dash: "dash" },
+      })));
+      layout.annotations = (layout.annotations || []).concat([
+        { x: dp.Elow, y: 0.93, xref: "x", yref: "paper", xanchor: "right", showarrow: false, text: `E<sub>low</sub> ${dp.Elow.toFixed(1)} eV `, font: { size: 11, color: c.iedf }, bgcolor: c.bg },
+        { x: dp.Ehigh, y: 0.93, xref: "x", yref: "paper", xanchor: "left", showarrow: false, text: ` E<sub>high</sub> ${dp.Ehigh.toFixed(1)} eV`, font: { size: 11, color: c.iedf }, bgcolor: c.bg },
+        { x: dp.Emid, y: 0.86, xref: "x", yref: "paper", showarrow: false, text: `ΔE = ${dp.dE.toFixed(1)} eV`, font: { size: 11, color: c.iedf }, bgcolor: c.bg },
+      ]);
+    }
+
     Plotly.react(plotEl, [
       { x: V, y: Array.from(r.Iavg.slice(0, n)), name: "I", mode: "lines", line: { color: c.raw, width: 6 },
         hovertemplate: "%{y:.4g} A" },
@@ -389,7 +428,7 @@
     "weak-signal": "Weak signal", noisy: "Noisy", "no-peak": "No peak", "peak-edge": "Peak at sweep end",
     "peak-negative": "Peak ≤ 0 eV", "eavg-negative": "E_avg ≤ 0", "iedf-noise": "IEDF mostly noise",
     "iedf-negative": "Negative IEDF", "traces-disagree": "Traces disagree", "few-traces": "Few traces",
-    "no-pressure": "Pressure not in name", inverted: "Inverted current", error: "Analysis failed",
+    "no-pressure": "Pressure not in name", "split-mismatch": "ΔE ≠ theory", "double-missing": "Double peak missing", inverted: "Inverted current", error: "Analysis failed",
   };
   const LEVEL_TEXT = { ok: "OK", check: "Check", review: "Must review", error: "Error" };
 
@@ -542,13 +581,13 @@
     state.result = f.result;
     state.params = f.params;
     renderResults(f.result);
+    renderReviewBar(); // first, so the plot is drawn at its final size
     if (f.result) renderPlot();
     else {
       renderEmptyPlot(`${f.name}: analysis failed`);
       setStatus(`${f.name}: ${f.error}`, true);
     }
     exportIds.forEach((id) => ($(id).disabled = !f.result));
-    renderReviewBar();
   }
 
   function renderReviewBar() {
@@ -570,16 +609,16 @@
     const ul = $("review-flags");
     ul.textContent = "";
     const flags = f.quality ? f.quality.flags : [];
+    if (f.quality && !flags.some((fl) => fl.level !== "info")) {
+      const li = document.createElement("li");
+      li.className = "ok";
+      li.textContent = `No problems found (SNR ${fmtG(f.quality.metrics.snr, 3)}).`;
+      ul.appendChild(li);
+    }
     for (const fl of flags) {
       const li = document.createElement("li");
       li.className = fl.level;
       li.innerHTML = flagHtml(fl.message);
-      ul.appendChild(li);
-    }
-    if (f.quality && !flags.length) {
-      const li = document.createElement("li");
-      li.className = "ok";
-      li.textContent = `No problems found (SNR ${fmtG(f.quality.metrics.snr, 3)}).`;
       ul.appendChild(li);
     }
     if (document.activeElement !== $("review-note")) $("review-note").value = f.review.note || "";
@@ -590,6 +629,8 @@
     $("btn-next").disabled = state.current >= state.files.length - 1;
     $("btn-next-flagged").disabled = !state.files.some((g, i) => i !== state.current && needsLook(g));
     $("btn-apply-all").hidden = state.files.length < 2;
+    // The bar's height changes with the number of flags: fit the plot to the space left
+    if (state.result && !$("view-plot").hidden && plotEl.data) Plotly.Plots.resize(plotEl);
   }
 
   function summary() {
@@ -652,12 +693,14 @@
       pill.className = `pill ${statusOf(f)}`;
       pill.textContent = statusText(f);
       td(pill);
-      const flags = f.quality ? f.quality.flags : [];
+      const flags = f.quality ? f.quality.flags.filter((fl) => fl.level !== "info") : [];
       const short = flags.map((fl) => FLAG_SHORT[fl.code] || fl.code);
       const ft = td(short.length ? short.join(" · ") : "—", "flagtext");
       ft.title = flags.map((fl) => flagText(fl.message)).join("\n");
       td(fx(r && r.Eavg), "num");
       td(fx(r && r.Epeak), "num");
+      const dp = r && r.doublePeak;
+      td(dp && dp.found ? fmtG(dp.dE, 3) : "—", "num").title = dp && dp.found ? `${fmtG(dp.Elow, 3)} and ${fmtG(dp.Ehigh, 3)} eV` : "";
       td(fx(r && r.flux, 3), "num");
       td(f.quality && f.quality.metrics.snr !== undefined ? fmtG(f.quality.metrics.snr, 3) : "—", "num");
       td(String(f.form.pressure) + (f.auto.pressure !== undefined && !f.edited ? "" : " *"), "num").title =
@@ -704,7 +747,9 @@
 
   function exportSummary() {
     const cols = ["file", "status", "automatic_check", "flags", "flag_messages", "review_note", "reviewed_at",
-      "Eavg_eV", "Epeak_eV", "flux", "ni", "tau_ratio", "electrode_voltage_V", "ion_flux_file", "n_traces",
+      "Eavg_eV", "Epeak_eV", "flux_m-2s-1", "ni_m-3", "tau_ratio", "electrode_voltage_V", "ion_flux_file", "n_traces",
+      "double_peak", "E_low_eV", "E_high_eV", "dE_eV", "dE_theory_eV", "peak_height_ratio_low_high", "sheath_regime",
+      "sheath_width_mm", "sheath_width_from_dE_mm", "mean_free_path_mm", "sheath_over_mfp",
       "snr", "negative_iedf_ratio", "trace_spread", "pressure_Pa", "gas", "Mi_u", "f_rf_MHz", "Vp_V", "Te_eV", "alpha",
       "method", "smoothing", "dIdE_smoothing_eV", "voltage_shift_V", "settings"];
     const q = (v) => {
@@ -724,6 +769,13 @@
         (f.quality ? f.quality.flags : []).map((x) => flagText(x.message)).join(" | "),
         f.review.note, f.review.status !== "pending" ? f.review.at : "",
         r.Eavg, r.Epeak, r.flux, r.ni, r.tauRatio, r.electrodeVoltage, r.ionFlux, r.nTraces,
+        ...(() => {
+          const dp = r.doublePeak;
+          if (!dp) return Array(11).fill("");
+          const mm = (x) => (Number.isFinite(x) ? x * 1e3 : "");
+          return [dp.found ? "yes" : "no", dp.Elow, dp.Ehigh, dp.dE, dp.model.dETheory, dp.heightRatio, dp.model.regime,
+            mm(dp.model.sheathWidth), mm(dp.sheathFromSplit), mm(dp.model.mfp), dp.model.sOverMfp];
+        })(),
         m.snr, m.negRatio, m.traceSpread,
         fm.pressure, fm.gas, fm.mi, fm.frf, fm.vp, fm.te, fm.alpha,
         fm.method, smoothing, fm["smooth-didv"], fm["shift-on"] ? fm.shift : 0,
@@ -1065,8 +1117,20 @@
   // ---------------- What's new ----------------
   // Newest first. With every release add an entry, bump APP_VERSION and set the
   // same version in sw.js (VERSION = "rfea-<APP_VERSION>").
-  const APP_VERSION = "2.3.0";
+  const APP_VERSION = "2.4.0";
   const CHANGELOG = [
+    {
+      version: "2.4.0",
+      date: "2026-11-05",
+      title: "Double peak and corrected flux units",
+      items: [
+        "Fixed: flux and n<sub>i</sub> were about 6×10<sup>18</sup> times too small because the collector current was not divided by the elementary charge, and τ<sub>i</sub>/τ<sub>rf</sub> was about 2.5×10<sup>9</sup> times too large. Flux is now in m⁻² s⁻¹ and τ<sub>i</sub>/τ<sub>rf</sub> gives the real sheath regime. Results from earlier versions differ.",
+        "Double peak from sheath oscillation: the two highest-energy peaks that stand clearly above the noise give E<sub>low</sub>, E<sub>high</sub> and ΔE, marked on the plot.",
+        "Sheath model: ΔE predicted from V<sub>p</sub>, f<sub>rf</sub>, M<sub>i</sub> and the Child-law sheath width, the sheath width worked out from the measured ΔE, and the ion mean free path.",
+        "New notes and flags: splitting too small to resolve, collisional sheath (low-energy peaks likely charge exchange), measured ΔE far from theory, double peak expected but not found.",
+        "Batch table and summary CSV have the double-peak and sheath columns.",
+      ],
+    },
     {
       version: "2.3.0",
       date: "2026-11-04",
@@ -1147,7 +1211,7 @@
       const ul = document.createElement("ul");
       for (const item of entry.items) {
         const li = document.createElement("li");
-        li.innerHTML = item; // fixed text from this file, only <sub> markup
+        li.innerHTML = item; // fixed text from this file, only <sub>/<sup> markup
         ul.appendChild(li);
       }
       sec.append(h, ul);

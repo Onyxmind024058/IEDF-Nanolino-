@@ -663,7 +663,8 @@ function iedf(I, V, p) {
 
   const corr = ionFluxPressureCorrection(p.pressure, p.fluxFactor, p.crossSection);
   dIdE = dIdE.map((v) => v * corr);
-  const flux = S * corr;
+  // S is a current (A) and corr 1/m²: divide by e for a particle flux (m⁻² s⁻¹)
+  const flux = (S * corr) / E_CHARGE;
 
   const vBohm = Math.sqrt((p.Te * E_CHARGE) / (p.Mi * AMU));
   const ni = vBohm !== 0 ? flux / (0.6 * vBohm) : NaN;
@@ -706,7 +707,7 @@ function fullAnalysis(text, p) {
   if (p.Mi != null && p.fRf != null && p.Vp != null) {
     tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: p.Vp, ni: r.ni, Te: p.Te, alpha: p.alpha });
   }
-  return {
+  const out = {
     ...r,
     electrodeVoltage,
     ionFlux,
@@ -716,6 +717,92 @@ function fullAnalysis(text, p) {
     nTraces: traces.V.length,
     traces,
   };
+  out.doublePeak = doublePeakAnalysis(out, p);
+  return out;
+}
+
+// ------------------------------------------------------------------
+// Double peak from sheath oscillation
+// ------------------------------------------------------------------
+// Ions crossing an RF-modulated sheath arrive with energies spread between
+// two peaks around the mean sheath voltage. In the high-frequency limit
+// (tau_i/tau_rf >> 1, collisionless sheath) the splitting is
+//   dE [eV] = 8 Vs / (3 pi w s) * sqrt(2 e Vs / M)      (Benoit-Cattin & Bernard)
+// with Vs the mean sheath voltage, w = 2 pi f_rf and s the mean sheath width.
+const DOUBLE_DEFAULTS = {
+  kSigma: 4, // a peak must stand this many noise sigmas above its surroundings
+  relProm: 0.15, // ... and at least this fraction of the IEDF maximum
+  edgeEV: 2, // ignore peaks this close to either end of the sweep
+  highFreqTau: 3, // tau_i/tau_rf above this: high-frequency regime, formula applies
+  lowFreqTau: 0.3, // below this: low-frequency regime (ions follow the RF field)
+};
+
+// Splitting dE (eV) for sheath voltage Vs (V) and width s (m), or the width for a splitting
+const splitFromSheath = (Vs, s, fRf, Mi) => ((8 * Vs) / (3 * Math.PI * 2 * Math.PI * fRf * s)) * Math.sqrt((2 * E_CHARGE * Vs) / (Mi * AMU));
+const sheathFromSplit = (Vs, dE, fRf, Mi) => ((8 * Vs) / (3 * Math.PI * 2 * Math.PI * fRf * dE)) * Math.sqrt((2 * E_CHARGE * Vs) / (Mi * AMU));
+
+// Sheath model from the panel values (Vp as sheath voltage, Child-law width
+// as in tauRatioNF) and the ion mean free path from the pressure
+function sheathModel(p, ni) {
+  const o = DOUBLE_DEFAULTS;
+  const out = { sheathWidth: NaN, lambdaD: NaN, tauRatio: NaN, dETheory: NaN, mfp: NaN, sOverMfp: NaN, regime: "unknown" };
+  if (!(p.Mi > 0 && p.fRf > 0 && p.Vp > 0 && p.Te > 0 && ni > 0)) return out;
+  out.lambdaD = Math.sqrt((8.85e-12 * p.Te) / E_CHARGE / ni);
+  out.sheathWidth = (p.alpha ?? 3) * out.lambdaD * (p.Vp / p.Te) ** 0.75;
+  out.tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: p.Vp, ni, Te: p.Te, alpha: p.alpha ?? 3 });
+  out.dETheory = splitFromSheath(p.Vp, out.sheathWidth, p.fRf, p.Mi);
+  out.regime = out.tauRatio >= o.highFreqTau ? "high-frequency" : out.tauRatio <= o.lowFreqTau ? "low-frequency" : "intermediate";
+  if (p.pressure > 0 && p.crossSection > 0) {
+    const Ng = 3.25e22 * p.pressure * 0.0075; // same gas density as the flux correction
+    out.mfp = 1 / (Ng * p.crossSection);
+    out.sOverMfp = out.sheathWidth / out.mfp;
+  }
+  return out;
+}
+
+// Significant IEDF peaks (energy descending) and the double-peak pair:
+// the two highest-energy peaks that stand kSigma noise sigmas above their
+// surroundings. Noise of dI/dE comes from the I-V noise through the
+// derivative and its smoothing window.
+function doublePeakAnalysis(r, p, opts = {}) {
+  const o = { ...DOUBLE_DEFAULTS, ...opts };
+  const E = Array.from(r.E);
+  const d = Array.from(r.dIdE);
+  const V = Array.from(r.Vavg);
+  const dv = medianStep(V);
+  const w = p.pipeline === "legacy" ? Math.max(1, p.smoothFactordIdV ?? 1) : oddWindow(p.dIdESmoothEV ?? 1, dv);
+  const corr = ionFluxPressureCorrection(p.pressure, p.fluxFactor, p.crossSection);
+  const sigma = (corr * noiseSigma(Array.from(r.Iavg)) * Math.SQRT2) / (w * dv);
+  let dmax = 0;
+  for (const v of d) if (v > dmax) dmax = v;
+  const minProm = Math.max(o.kSigma * sigma, o.relProm * dmax);
+  const vLo = Math.min(...V) + o.edgeEV;
+  const vHi = Math.max(...V) - o.edgeEV;
+  const { peaks, prominences: prom } = findPeaks(d, minProm > 0 ? minProm : Infinity);
+  const list = peaks.map((i, k) => {
+    // Parabola through the three top points for sub-step energy
+    let Ei = E[i];
+    if (i > 0 && i < d.length - 1) {
+      const den = d[i - 1] - 2 * d[i] + d[i + 1];
+      if (den < 0) Ei += Math.max(-0.5, Math.min(0.5, (0.5 * (d[i - 1] - d[i + 1])) / den)) * (E[i + 1] - E[i - 1]) / 2;
+    }
+    return { E: Ei, height: d[i], prominence: prom[k], sigmas: sigma > 0 ? prom[k] / sigma : Infinity };
+  }).filter((q) => q.E > 0 && q.E > vLo && q.E < vHi).sort((a, b) => b.E - a.E);
+
+  const model = sheathModel(p, r.ni);
+  const resolution = Math.max(2 * dv, w * dv);
+  const out = { peaks: list, sigma, resolution, model, found: false, Elow: NaN, Ehigh: NaN, dE: NaN, Emid: NaN, heightRatio: NaN, sheathFromSplit: NaN };
+  if (list.length >= 2) {
+    const [hi, lo] = list;
+    out.found = true;
+    out.Ehigh = hi.E;
+    out.Elow = lo.E;
+    out.dE = hi.E - lo.E;
+    out.Emid = 0.5 * (hi.E + lo.E);
+    out.heightRatio = lo.height / hi.height;
+    if (p.Mi > 0 && p.fRf > 0) out.sheathFromSplit = sheathFromSplit(out.Emid, out.dE, p.fRf, p.Mi);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------
@@ -750,8 +837,9 @@ function ivStep(I) {
 }
 
 // Measures and flags for one analysed file. Each flag is
-// { level: "review" | "check", code, message }; "review" means a person must
-// look at the file before its results are used.
+// { level: "review" | "check" | "info", code, message }; "review" means a
+// person must look at the file before its results are used; "info" notes
+// (double peak, sheath regime) do not change the rating.
 function assessQuality(r, opts = {}) {
   const o = { ...QUALITY_DEFAULTS, ...opts };
   const flags = [];
@@ -811,7 +899,31 @@ function assessQuality(r, opts = {}) {
   }
   if (r.nTraces < o.minTraces) add("check", "few-traces", `Only ${r.nTraces} trace${r.nTraces === 1 ? "" : "s"} averaged.`);
 
-  const level = flags.some((f) => f.level === "review") ? "review" : flags.length ? "check" : "ok";
+  // Double peak from sheath oscillation; "info" notes do not change the rating
+  const dp = r.doublePeak;
+  if (dp) {
+    const m = dp.model;
+    const mm = (x) => (x * 1e3).toFixed(x < 1e-3 ? 2 : 1);
+    const collisional = m.sOverMfp > 1;
+    const theory = Number.isFinite(m.dETheory) ? `; theory ${m.dETheory.toFixed(m.dETheory < 1 ? 2 : 1)} eV` : "";
+    if (dp.found) {
+      add("info", "double-peak", `Double peak: ${f1(dp.Elow)} and ${f1(dp.Ehigh)} eV (ΔE = ${f1(dp.dE)} eV${theory}).`);
+      const ratio = dp.dE / m.dETheory;
+      if (m.regime === "high-frequency" && !collisional && Number.isFinite(ratio) && (ratio > 2 || ratio < 0.5)) {
+        add("check", "split-mismatch", `Measured splitting (${f1(dp.dE)} eV) is ${ratio > 1 ? f1(ratio) + "× larger" : f1(1 / ratio) + "× smaller"} than the sheath model (${m.dETheory.toFixed(2)} eV). Check V<sub>p</sub>, T<sub>e</sub> and α, or whether one peak is not from the sheath.`);
+      }
+    } else if (m.regime !== "low-frequency" && !collisional && m.dETheory >= 2 * dp.resolution && snr >= o.snrCheck) {
+      add("check", "double-missing", `The sheath model predicts a double peak (ΔE ≈ ${f1(m.dETheory)} eV) but only ${dp.peaks.length === 1 ? "one peak was" : "no clear peak was"} found.`);
+    }
+    if (m.regime === "high-frequency" && m.dETheory < dp.resolution) {
+      add("info", "split-unresolved", `Predicted splitting ΔE ≈ ${m.dETheory.toFixed(2)} eV is below the resolution (${dp.resolution.toFixed(1)} eV), so a sheath-oscillation double peak cannot be resolved.`);
+    }
+    if (collisional) {
+      add("info", "collisional", `Collisional sheath: about ${Math.round(m.sOverMfp)} ion mean free paths across it (s ≈ ${mm(m.sheathWidth)} mm, λ<sub>i</sub> ≈ ${mm(m.mfp)} mm). Low-energy peaks are likely charge exchange, and the double peak is washed out.`);
+    }
+  }
+
+  const level = flags.some((f) => f.level === "review") ? "review" : flags.some((f) => f.level === "check") ? "check" : "ok";
   return { level, flags, metrics: { snr, noise, step, negRatio, traceSpread: spread } };
 }
 
@@ -848,5 +960,5 @@ function parseFileName(name) {
   return out;
 }
 
-globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis, assessQuality, QUALITY_DEFAULTS, parseFileName };
+globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis, assessQuality, QUALITY_DEFAULTS, parseFileName, doublePeakAnalysis, sheathModel, DOUBLE_DEFAULTS, splitFromSheath, sheathFromSplit };
 })();
