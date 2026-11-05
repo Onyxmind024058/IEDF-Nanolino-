@@ -171,6 +171,7 @@
         <ul class="flags" id="review-flags"></ul>
         <div class="review-actions">
           <input type="text" id="review-note" placeholder="Review note (optional)" aria-label="Review note">
+          <button type="button" class="btn" id="btn-remove" title="Take this file out of the batch (its saved review stays in this browser)">Remove</button>
           <button type="button" class="btn" id="btn-apply-all" title="Copy these settings to every file not yet approved or rejected (file-name settings still apply)">Use settings for all</button>
           <button type="button" class="btn destructive" id="btn-reject">Reject</button>
           <button type="button" class="btn primary" id="btn-approve">Approve</button>
@@ -195,6 +196,7 @@
           </select>
         </label>
         <button type="button" class="btn" id="btn-approve-ok">Approve all OK</button>
+        <button type="button" class="btn" id="btn-remove-rejected" title="Take the rejected files out of the list and the summary">Remove rejected</button>
         <button type="button" class="btn primary" id="btn-export-summary">Export summary CSV</button>
         <button type="button" class="btn destructive" id="btn-clear">Clear list</button>
       </div>
@@ -203,7 +205,7 @@
           <thead><tr>
             <th>#</th><th>File</th><th>Status</th><th>Flags</th>
             <th class="num">E<sub>avg</sub> (eV)</th><th class="num">E<sub>peak</sub> (eV)</th><th class="num">ΔE (eV)</th><th class="num">Flux</th><th class="num">SNR</th>
-            <th class="num">P (Pa)</th><th>Gas</th><th class="num">f<sub>rf</sub> (MHz)</th><th>Note</th>
+            <th class="num">P (Pa)</th><th>Gas</th><th class="num">f<sub>rf</sub> (MHz)</th><th>Note</th><th><span class="visually-hidden">Remove</span></th>
           </tr></thead>
           <tbody id="batch-body"></tbody>
         </table>

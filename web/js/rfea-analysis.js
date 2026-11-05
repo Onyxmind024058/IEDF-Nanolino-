@@ -703,9 +703,12 @@ function fullAnalysis(text, p) {
   if (p.pipeline !== "legacy") Isth = smooth1d(Iavg, oddWindow(1, medianStep(Vavg)));
   const r = iedf(Isth, Vavg, p);
 
+  // The sheath in front of the probe holds Vp minus the electrode potential
+  // (Vp alone on a grounded electrode); the legacy pipeline keeps the Python Vp.
+  const Vsheath = p.pipeline === "legacy" ? p.Vp : sheathVoltage(p.Vp, electrodeVoltage);
   let tauRatio = null;
-  if (p.Mi != null && p.fRf != null && p.Vp != null) {
-    tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: p.Vp, ni: r.ni, Te: p.Te, alpha: p.alpha });
+  if (p.Mi != null && p.fRf != null && p.Vp != null && Vsheath > 0) {
+    tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: Vsheath, ni: r.ni, Te: p.Te, alpha: p.alpha });
   }
   const out = {
     ...r,
@@ -730,27 +733,34 @@ function fullAnalysis(text, p) {
 //   dE [eV] = 8 Vs / (3 pi w s) * sqrt(2 e Vs / M)      (Benoit-Cattin & Bernard)
 // with Vs the mean sheath voltage, w = 2 pi f_rf and s the mean sheath width.
 const DOUBLE_DEFAULTS = {
-  kSigma: 4, // a peak must stand this many noise sigmas above its surroundings
-  relProm: 0.15, // ... and at least this fraction of the IEDF maximum
+  windowFrac: 0.02, // peaks are found on dI/dV smoothed over this fraction of the sweep ...
+  minWindowEV: 2, // ... but at least this wide
+  kSigma: 8, // a peak must stand this many noise sigmas above its surroundings (noise alone reaches ~7)
+  relProm: 0.2, // ... and at least this fraction of the highest IEDF value
   edgeEV: 2, // ignore peaks this close to either end of the sweep
   highFreqTau: 3, // tau_i/tau_rf above this: high-frequency regime, formula applies
   lowFreqTau: 0.3, // below this: low-frequency regime (ions follow the RF field)
 };
 
+// Mean sheath voltage: plasma potential minus the electrode potential from the file
+function sheathVoltage(Vp, electrodeVoltage) {
+  return Number.isFinite(electrodeVoltage) ? Vp - electrodeVoltage : Vp;
+}
+
 // Splitting dE (eV) for sheath voltage Vs (V) and width s (m), or the width for a splitting
 const splitFromSheath = (Vs, s, fRf, Mi) => ((8 * Vs) / (3 * Math.PI * 2 * Math.PI * fRf * s)) * Math.sqrt((2 * E_CHARGE * Vs) / (Mi * AMU));
 const sheathFromSplit = (Vs, dE, fRf, Mi) => ((8 * Vs) / (3 * Math.PI * 2 * Math.PI * fRf * dE)) * Math.sqrt((2 * E_CHARGE * Vs) / (Mi * AMU));
 
-// Sheath model from the panel values (Vp as sheath voltage, Child-law width
-// as in tauRatioNF) and the ion mean free path from the pressure
-function sheathModel(p, ni) {
+// Sheath model from the panel values (sheath voltage Vs = Vp - electrode
+// voltage, Child-law width as in tauRatioNF) and the ion mean free path
+function sheathModel(p, ni, Vs = p.Vp) {
   const o = DOUBLE_DEFAULTS;
-  const out = { sheathWidth: NaN, lambdaD: NaN, tauRatio: NaN, dETheory: NaN, mfp: NaN, sOverMfp: NaN, regime: "unknown" };
-  if (!(p.Mi > 0 && p.fRf > 0 && p.Vp > 0 && p.Te > 0 && ni > 0)) return out;
+  const out = { sheathVoltage: Vs, sheathWidth: NaN, lambdaD: NaN, tauRatio: NaN, dETheory: NaN, mfp: NaN, sOverMfp: NaN, regime: "unknown" };
+  if (!(p.Mi > 0 && p.fRf > 0 && Vs > 0 && p.Te > 0 && ni > 0)) return out;
   out.lambdaD = Math.sqrt((8.85e-12 * p.Te) / E_CHARGE / ni);
-  out.sheathWidth = (p.alpha ?? 3) * out.lambdaD * (p.Vp / p.Te) ** 0.75;
-  out.tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: p.Vp, ni, Te: p.Te, alpha: p.alpha ?? 3 });
-  out.dETheory = splitFromSheath(p.Vp, out.sheathWidth, p.fRf, p.Mi);
+  out.sheathWidth = (p.alpha ?? 3) * out.lambdaD * (Vs / p.Te) ** 0.75;
+  out.tauRatio = tauRatioNF({ Mi: p.Mi, fRf: p.fRf, Vp: Vs, ni, Te: p.Te, alpha: p.alpha ?? 3 });
+  out.dETheory = splitFromSheath(Vs, out.sheathWidth, p.fRf, p.Mi);
   out.regime = out.tauRatio >= o.highFreqTau ? "high-frequency" : out.tauRatio <= o.lowFreqTau ? "low-frequency" : "intermediate";
   if (p.pressure > 0 && p.crossSection > 0) {
     const Ng = 3.25e22 * p.pressure * 0.0075; // same gas density as the flux correction
@@ -760,40 +770,98 @@ function sheathModel(p, ni) {
   return out;
 }
 
-// Significant IEDF peaks (energy descending) and the double-peak pair:
-// the two highest-energy peaks that stand kSigma noise sigmas above their
-// surroundings. Noise of dI/dE comes from the I-V noise through the
-// derivative and its smoothing window.
+// dI/dV of the averaged I-V curve from a least-squares line over w points
+// (Savitzky-Golay first derivative). For white noise sigma_I its noise is
+// exactly sigma_I / (dv * sqrt(sum k^2)), so peaks can be tested against it.
+function detectionDerivative(V, I, widthEV) {
+  const dv = medianStep(V);
+  const w = Math.max(5, oddWindow(widthEV, dv));
+  const h = w >> 1;
+  let s2 = 0;
+  for (let k = -h; k <= h; k++) s2 += k * k;
+  const E = [];
+  const d = [];
+  for (let i = h; i < I.length - h; i++) {
+    let a = 0;
+    for (let k = -h; k <= h; k++) a += k * I[i + k];
+    E.push(V[i]);
+    d.push(a / (dv * s2));
+  }
+  return { E, d, sigma: noiseSigma(I) / (dv * Math.sqrt(s2)), width: w * dv, dv };
+}
+
+// Significant IEDF peaks (energy descending) and the double-peak pair: the two
+// highest-energy peaks standing kSigma noise sigmas and relProm of the maximum
+// above their surroundings. Peaks are found on a derivative smoothed over 2 % of
+// the sweep, independent of the smoothing chosen for the plotted IEDF.
+// When the high-energy peak is not a separate maximum (a plateau ending in a
+// sharp edge, typical of broadened bimodal IEDFs), E_high is that edge.
 function doublePeakAnalysis(r, p, opts = {}) {
   const o = { ...DOUBLE_DEFAULTS, ...opts };
-  const E = Array.from(r.E);
-  const d = Array.from(r.dIdE);
   const V = Array.from(r.Vavg);
-  const dv = medianStep(V);
-  const w = p.pipeline === "legacy" ? Math.max(1, p.smoothFactordIdV ?? 1) : oddWindow(p.dIdESmoothEV ?? 1, dv);
-  const corr = ionFluxPressureCorrection(p.pressure, p.fluxFactor, p.crossSection);
-  const sigma = (corr * noiseSigma(Array.from(r.Iavg)) * Math.SQRT2) / (w * dv);
+  const I = Array.from(r.Iavg);
+  const vMin = Math.min(...V);
+  const vMax = Math.max(...V);
+  const det = detectionDerivative(V, I, Math.max(o.minWindowEV, o.windowFrac * (vMax - vMin)));
+  const { E, d, sigma } = det;
   let dmax = 0;
   for (const v of d) if (v > dmax) dmax = v;
   const minProm = Math.max(o.kSigma * sigma, o.relProm * dmax);
-  const vLo = Math.min(...V) + o.edgeEV;
-  const vHi = Math.max(...V) - o.edgeEV;
   const { peaks, prominences: prom } = findPeaks(d, minProm > 0 ? minProm : Infinity);
-  const list = peaks.map((i, k) => {
+  const refine = (i) => {
     // Parabola through the three top points for sub-step energy
-    let Ei = E[i];
-    if (i > 0 && i < d.length - 1) {
-      const den = d[i - 1] - 2 * d[i] + d[i + 1];
-      if (den < 0) Ei += Math.max(-0.5, Math.min(0.5, (0.5 * (d[i - 1] - d[i + 1])) / den)) * (E[i + 1] - E[i - 1]) / 2;
-    }
-    return { E: Ei, height: d[i], prominence: prom[k], sigmas: sigma > 0 ? prom[k] / sigma : Infinity };
-  }).filter((q) => q.E > 0 && q.E > vLo && q.E < vHi).sort((a, b) => b.E - a.E);
+    if (i <= 0 || i >= d.length - 1) return E[i];
+    const den = d[i - 1] - 2 * d[i] + d[i + 1];
+    return den < 0 ? E[i] + Math.max(-0.5, Math.min(0.5, (0.5 * (d[i - 1] - d[i + 1])) / den)) * (E[i + 1] - E[i - 1]) / 2 : E[i];
+  };
+  const list = peaks.map((i, k) => ({ i, E: refine(i), height: d[i], prominence: prom[k], sigmas: sigma > 0 ? prom[k] / sigma : Infinity }))
+    .filter((q) => q.E > 0 && q.E > vMin + o.edgeEV && q.E < vMax - o.edgeEV)
+    .sort((a, b) => b.E - a.E);
 
-  const model = sheathModel(p, r.ni);
-  const resolution = Math.max(2 * dv, w * dv);
-  const out = { peaks: list, sigma, resolution, model, found: false, Elow: NaN, Ehigh: NaN, dE: NaN, Emid: NaN, heightRatio: NaN, sheathFromSplit: NaN };
-  if (list.length >= 2) {
-    const [hi, lo] = list;
+  const Vs = p.pipeline === "legacy" ? p.Vp : sheathVoltage(p.Vp, r.electrodeVoltage);
+  const model = sheathModel(p, r.ni, Vs);
+  const resolution = Math.max(2 * det.dv, det.width);
+  const out = { peaks: list.map(({ i, ...q }) => q), sigma, resolution, detection: { E, d, width: det.width }, model,
+    found: false, highFromEdge: false, Elow: NaN, Ehigh: NaN, dE: NaN, Emid: NaN, heightRatio: NaN, sheathFromSplit: NaN };
+
+  let hi = null;
+  let lo = null;
+  if (list.length) {
+    // Shoulder test on the high-energy side of the highest-energy peak first
+    // (lower peaks may be charge exchange): a plateau of at least 3 windows,
+    // still above half the peak height just before a sharp edge (falls to 15 %
+    // within 3 windows), then nothing.
+    const pk = list[0];
+    const wPts = Math.round(det.width / det.dv);
+    let edge = -1;
+    for (let j = pk.i + 1; j < d.length; j++) if (d[j] >= 0.5 * pk.height) edge = j;
+    if (edge > 0 && edge - pk.i >= 3 * wPts) {
+      let j = edge;
+      while (j < d.length && d[j] > 0.15 * pk.height) j++;
+      let plateau = 0;
+      for (let k = edge - wPts; k <= edge; k++) plateau += d[k] / (wPts + 1);
+      const sharp = j < d.length && j - edge <= 3 * wPts;
+      const after = j < d.length ? Math.max(...d.slice(j)) : Infinity;
+      if (sharp && plateau >= 0.5 * pk.height && after < 0.5 * plateau) {
+        // Edge position: where dI/dV crosses half the plateau level
+        let k = edge;
+        while (k < d.length - 1 && d[k + 1] > 0.5 * plateau) k++;
+        const t = d[k] !== d[k + 1] ? (d[k] - 0.5 * plateau) / (d[k] - d[k + 1]) : 0;
+        hi = { E: E[k] + t * (E[k + 1] - E[k]), height: plateau };
+        lo = pk;
+        out.highFromEdge = true;
+      }
+    }
+    if (!hi && list.length >= 2) {
+      // A real double peak has a valley: below 80 % of the lower peak (noise
+      // wiggles on a broad flat top do not)
+      const [a, b] = list;
+      let valley = Infinity;
+      for (let k = Math.min(a.i, b.i); k <= Math.max(a.i, b.i); k++) valley = Math.min(valley, d[k]);
+      if (valley <= 0.8 * Math.min(a.height, b.height)) [hi, lo] = list;
+    }
+  }
+  if (hi && lo) {
     out.found = true;
     out.Ehigh = hi.E;
     out.Elow = lo.E;
@@ -816,18 +884,22 @@ const QUALITY_DEFAULTS = {
   negCheck: 0.5,
   edgeEV: 2, // E_peak this close to either end of the sweep: must review
   spreadCheck: 0.5, // step varies between traces by more than this fraction: check
-  minTraces: 3,
+  minTraces: 2,
 };
 
 const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
 
-// Robust noise of a curve: median absolute point-to-point change (white noise -> sigma)
+// Robust noise of a curve: median absolute second difference, which ignores
+// the slope of the curve itself (white noise -> sigma; var of y[i+1]-2y[i]+y[i-1] is 6 sigma^2)
 function noiseSigma(y) {
   const d = [];
-  for (let i = 1; i < y.length; i++) if (Number.isFinite(y[i]) && Number.isFinite(y[i - 1])) d.push(Math.abs(y[i] - y[i - 1]));
+  for (let i = 1; i < y.length - 1; i++) {
+    const v = y[i + 1] - 2 * y[i] + y[i - 1];
+    if (Number.isFinite(v)) d.push(Math.abs(v));
+  }
   if (!d.length) return NaN;
   d.sort((a, b) => a - b);
-  return d[d.length >> 1] / 0.6745 / Math.SQRT2;
+  return d[d.length >> 1] / 0.6745 / Math.sqrt(6);
 }
 
 // Change of current across the sweep: mean of the last 10 % minus the first 10 %
@@ -904,22 +976,25 @@ function assessQuality(r, opts = {}) {
   if (dp) {
     const m = dp.model;
     const mm = (x) => (x * 1e3).toFixed(x < 1e-3 ? 2 : 1);
-    const collisional = m.sOverMfp > 1;
+    // A measured splitting gives the sheath width directly; prefer it to the model
+    const sUsed = dp.found && Number.isFinite(dp.sheathFromSplit) ? dp.sheathFromSplit : m.sheathWidth;
+    const collisional = sUsed / m.mfp > 1;
     const theory = Number.isFinite(m.dETheory) ? `; theory ${m.dETheory.toFixed(m.dETheory < 1 ? 2 : 1)} eV` : "";
     if (dp.found) {
-      add("info", "double-peak", `Double peak: ${f1(dp.Elow)} and ${f1(dp.Ehigh)} eV (ΔE = ${f1(dp.dE)} eV${theory}).`);
+      add("info", "double-peak", `Double peak: ${f1(dp.Elow)} and ${f1(dp.Ehigh)} eV (ΔE = ${f1(dp.dE)} eV${theory}).` +
+        (dp.highFromEdge ? " The high-energy peak is not a separate maximum; E<sub>high</sub> is the sharp high-energy edge (half the plateau level)." : ""));
       const ratio = dp.dE / m.dETheory;
       if (m.regime === "high-frequency" && !collisional && Number.isFinite(ratio) && (ratio > 2 || ratio < 0.5)) {
-        add("check", "split-mismatch", `Measured splitting (${f1(dp.dE)} eV) is ${ratio > 1 ? f1(ratio) + "× larger" : f1(1 / ratio) + "× smaller"} than the sheath model (${m.dETheory.toFixed(2)} eV). Check V<sub>p</sub>, T<sub>e</sub> and α, or whether one peak is not from the sheath.`);
+        add("check", "split-mismatch", `Measured splitting (${f1(dp.dE)} eV) is ${ratio > 1 ? f1(ratio) + "× larger" : f1(1 / ratio) + "× smaller"} than the sheath model (${m.dETheory.toFixed(2)} eV): the model sheath is ${mm(m.sheathWidth)} mm wide, the splitting gives ${mm(dp.sheathFromSplit)} mm. Check V<sub>p</sub>, T<sub>e</sub> and α, or whether one peak is not from the sheath.`);
       }
     } else if (m.regime !== "low-frequency" && !collisional && m.dETheory >= 2 * dp.resolution && snr >= o.snrCheck) {
       add("check", "double-missing", `The sheath model predicts a double peak (ΔE ≈ ${f1(m.dETheory)} eV) but only ${dp.peaks.length === 1 ? "one peak was" : "no clear peak was"} found.`);
     }
-    if (m.regime === "high-frequency" && m.dETheory < dp.resolution) {
+    if (!dp.found && m.regime === "high-frequency" && m.dETheory < dp.resolution) {
       add("info", "split-unresolved", `Predicted splitting ΔE ≈ ${m.dETheory.toFixed(2)} eV is below the resolution (${dp.resolution.toFixed(1)} eV), so a sheath-oscillation double peak cannot be resolved.`);
     }
     if (collisional) {
-      add("info", "collisional", `Collisional sheath: about ${Math.round(m.sOverMfp)} ion mean free paths across it (s ≈ ${mm(m.sheathWidth)} mm, λ<sub>i</sub> ≈ ${mm(m.mfp)} mm). Low-energy peaks are likely charge exchange, and the double peak is washed out.`);
+      add("info", "collisional", `Collisional sheath: about ${Math.round(sUsed / m.mfp)} ion mean free paths across it (s ≈ ${mm(sUsed)} mm${sUsed === m.sheathWidth ? "" : " from ΔE"}, λ<sub>i</sub> ≈ ${mm(m.mfp)} mm). Low-energy peaks are likely charge exchange, and the double peak is washed out.`);
     }
   }
 
@@ -960,5 +1035,5 @@ function parseFileName(name) {
   return out;
 }
 
-globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis, assessQuality, QUALITY_DEFAULTS, parseFileName, doublePeakAnalysis, sheathModel, DOUBLE_DEFAULTS, splitFromSheath, sheathFromSplit };
+globalThis.RFEA = { smooth1d, findPeaks, savgolFilter, importFile, importSdf, isSdf, separateTraces, traceAverageAndSmooth, manualSmoothByRanges, smoothIVSinglePeak, peakPreservingSmooth, peakEnergy, medianStep, oddWindow, ionFluxPressureCorrection, tauRatioNF, iedf, fluxFactor, CROSS_SECTIONS, fullAnalysis, assessQuality, QUALITY_DEFAULTS, parseFileName, doublePeakAnalysis, sheathModel, sheathVoltage, detectionDerivative, noiseSigma, DOUBLE_DEFAULTS, splitFromSheath, sheathFromSplit };
 })();

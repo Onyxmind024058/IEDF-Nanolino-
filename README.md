@@ -133,12 +133,12 @@ A `*` after the pressure in the table means it came from the panel or was edited
 | Rating | When |
 |---|---|
 | **Must review** (red) | I–V step below *Must review below SNR* × noise (default 5) · E_peak at either end of the sweep (within 2 eV) or ≤ 0 eV · E_avg ≤ 0 eV · negative IEDF area above 75 % of the positive area · current falling with voltage (inverted sign) · analysis failed |
-| **Check** (amber) | SNR below *Check below SNR* (default 15) · negative IEDF area above 50 % · the I–V step varies by more than 50 % between traces · fewer than 3 traces · pressure not in the file name |
+| **Check** (amber) | SNR below *Check below SNR* (default 15) · negative IEDF area above 50 % · the I–V step varies by more than 50 % between traces · a single trace · pressure not in the file name |
 | **OK** | none of the above |
 
 SNR is the I–V step (mean current of the last 10 % of the sweep minus the first
-10 %) divided by the noise (robust estimate from point-to-point changes of the
-averaged curve). Changing the two SNR limits re-rates every file at once.
+10 %) divided by the noise (robust estimate from second differences of the
+averaged curve, which ignores its slope). Changing the two SNR limits re-rates every file at once.
 
 **Reviewing.** Click a row to open the file in the **Plot** view. The bar above the
 plot lists its flags.
@@ -152,6 +152,10 @@ plot lists its flags.
   approved or rejected. Each still gets its file-name settings.
 - In the Batch view, **Approve all OK** approves every unflagged pending file in
   one go (recorded as *Approved (bulk)*). **Show** filters the table.
+- **Remove** files you don't want in the batch: ✕ at the end of a row, **Remove** in
+  the review bar, or **Remove rejected** for all rejected files. They leave the table
+  and the summary CSV; their saved review stays in the browser and comes back if
+  the file is opened again.
 
 **Export summary CSV** writes one row per file: status, automatic rating, flags,
 note, review time, E_avg, E_peak, flux, n_i, τ ratio, electrode voltage, SNR, the
@@ -288,13 +292,17 @@ between two peaks around the mean sheath voltage V̄s. The app reports:
 
 | Value | Meaning |
 |---|---|
-| **Double peak** | E_low / E_high: the two highest-energy IEDF peaks that stand at least 4 noise σ (of dI/dE, propagated from the I–V noise) and 15 % of the IEDF maximum above their surroundings, away from the sweep ends. *single* or *none* otherwise. |
+| **Double peak** | E_low / E_high: the two highest-energy IEDF peaks that stand at least 8 noise σ and 20 % of the IEDF maximum above their surroundings, with a valley below 80 % of the lower peak between them, away from the sweep ends. *single* or *none* otherwise. If the highest-energy peak is followed by a plateau (≥ 3 smoothing widths, above half the peak height) that ends in a sharp edge, the high-energy peak is taken at that edge (half the plateau level) — typical for broadened bimodal IEDFs on a powered electrode. |
 | **ΔE measured** | E_high − E_low; the tooltip gives the peak-height ratio low/high |
-| **ΔE theory** | ΔE = 8 V̄s / (3π ω s̄) · √(2e V̄s / M), with V̄s = V_p, ω = 2π f_rf and the Child-law width s̄ = α λ_D (V_p/T_e)^¾ (Benoit-Cattin & Bernard). Valid for τᵢ/τ_rf ≫ 1 and a collisionless sheath. |
+| **ΔE theory** | ΔE = 8 V̄s / (3π ω s̄) · √(2e V̄s / M), with ω = 2π f_rf, the mean sheath voltage V̄s = V_p − electrode voltage (from the file; ≈ V_p on a grounded electrode) and the Child-law width s̄ = α λ_D (V̄s/T_e)^¾ (Benoit-Cattin & Bernard). Valid for τᵢ/τ_rf ≫ 1 and a collisionless sheath. τᵢ/τ_rf also uses V̄s. |
 | **Sheath width** | s̄ from the model; *from ΔE* inverts the formula with the measured ΔE and V̄s = (E_low + E_high)/2 |
 | **Mean free path λᵢ** | 1/(N_g σ) from the pressure and the gas cross-section |
 
-The peaks are marked on the plot. Regimes: τᵢ/τ_rf ≥ 3 high-frequency (the formula
+Peaks are found on dI/dV of the averaged I–V curve, smoothed by a least-squares
+line over 2 % of the sweep (at least 2 eV), whatever smoothing is chosen for the
+plotted IEDF. Its noise σ follows exactly from the I–V noise (estimated from second
+differences, which ignore the slope of the curve). This smoothing width is the
+*resolution* below. The peaks are marked on the plot. Regimes: τᵢ/τ_rf ≥ 3 high-frequency (the formula
 applies), ≤ 0.3 low-frequency (ions follow the RF field, broad IEDF up to the peak
 sheath voltage), intermediate in between.
 
@@ -304,7 +312,7 @@ Notes (grey, they do not change the rating) and flags:
 |---|---|
 | *Note* · double peak | Double peak found, with ΔE and the theory value |
 | *Note* · unresolved | High-frequency regime and predicted ΔE below the resolution (the larger of 2 voltage steps and the dI/dE smoothing width) |
-| *Note* · collisional | Sheath wider than one ion mean free path: low-energy peaks are likely charge exchange, and the double peak is washed out |
+| *Note* · collisional | Sheath wider than one ion mean free path (the width from ΔE when a double peak was found, otherwise the model width): low-energy peaks are likely charge exchange, and the double peak is washed out |
 | **Check** · ΔE ≠ theory | High-frequency, collisionless, and measured ΔE more than 2× away from theory |
 | **Check** · double peak missing | Not low-frequency, collisionless, predicted ΔE at least twice the resolution, SNR above the Check limit, but no double peak found |
 

@@ -379,6 +379,10 @@ table.batch .file, table.batch .gas { white-space: nowrap; }
 table.batch .flagtext { color: var(--text-lo); min-width: 160px; }
 table.batch .note { color: var(--text-lo); max-width: 220px; overflow-wrap: anywhere; }
 .batch-empty { padding: 24px; text-align: center; }
+table.batch td.remove { padding: 2px 4px; text-align: center; }
+table.batch .remove .btn { padding: 0 8px; min-height: 24px; color: var(--text-lo); }
+table.batch .remove .btn:hover { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .batch-empty[hidden] { display: none; }
 
 @media (max-width: 820px) {

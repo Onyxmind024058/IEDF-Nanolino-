@@ -105,6 +105,21 @@ const { chromium } = require("playwright");
   await page.waitForTimeout(200);
   console.log("      with SNR limits 0:", (await rows()).map((x) => x.flags).join(" | "));
 
+  // Remove files: the row button and the review bar
+  const before = (await rows()).length;
+  await page.click("#batch-body tr:last-child td.remove button");
+  check((await rows()).length === before - 1, "✕ removes a file from the batch");
+  await page.click("#batch-body tr:nth-child(1)");
+  const removedName = await page.textContent("#review-name");
+  await page.click("#btn-remove");
+  await page.click('[data-view="batch"]');
+  r = await rows();
+  check(r.length === before - 2 && !r.some((x) => x.file === removedName), `Remove in the review bar removes ${removedName}`);
+  const [dl2] = await Promise.all([page.waitForEvent("download"), page.click("#btn-export-summary")]);
+  const p2 = path.join(out, "after_remove_" + dl2.suggestedFilename());
+  await dl2.saveAs(p2);
+  check(fs.readFileSync(p2, "utf8").trim().split("\n").length === before - 1, "removed files are left out of the summary CSV");
+
   // Phone width
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(300);

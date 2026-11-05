@@ -662,6 +662,7 @@
     $("batch-empty").hidden = sum.total > 0;
     ["btn-approve-ok", "btn-export-summary", "btn-clear"].forEach((id) => ($(id).disabled = !sum.total));
     $("btn-approve-ok").disabled = !state.files.some((f) => f.review.status === "pending" && f.quality && f.quality.level === "ok");
+    $("btn-remove-rejected").disabled = !sum.rejected;
     const body = $("batch-body");
     body.textContent = "";
     const filter = $("batch-filter").value;
@@ -708,8 +709,40 @@
       td(f.form.gas, "gas");
       td(String(f.form.frf), "num");
       td(f.review.note || "", "note");
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "btn ghost";
+      rm.textContent = "✕";
+      rm.title = `Remove ${f.name} from the batch`;
+      rm.setAttribute("aria-label", rm.title);
+      rm.addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeFiles([f]);
+      });
+      rm.addEventListener("keydown", (e) => e.stopPropagation());
+      td(rm, "remove");
       body.appendChild(tr);
     });
+  }
+
+  // Take files out of the batch; their saved review stays in this browser,
+  // so opening them again restores it
+  function removeFiles(list) {
+    if (!list.length) return;
+    const shown = cur();
+    state.files = state.files.filter((f) => !list.includes(f));
+    if (!state.files.length) {
+      state.current = -1;
+      showCurrent();
+      $("file-name").textContent = "No file selected. Files are read in your browser and never uploaded.";
+    } else if (!state.files.includes(shown)) {
+      selectFile(Math.min(state.current, state.files.length - 1));
+    } else {
+      state.current = state.files.indexOf(shown);
+      renderReviewBar();
+    }
+    renderBatch();
+    setStatus(list.length === 1 ? `Removed ${list[0].name} from the batch` : `Removed ${list.length} files from the batch`);
   }
 
   function setView(name) {
@@ -826,6 +859,8 @@
     renderBatch();
   });
   $("btn-apply-all").addEventListener("click", applySettingsToAll);
+  $("btn-remove").addEventListener("click", () => cur() && removeFiles([cur()]));
+  $("btn-remove-rejected").addEventListener("click", () => removeFiles(state.files.filter((f) => f.review.status === "rejected")));
   $("batch-filter").addEventListener("change", renderBatch);
   $("btn-approve-ok").addEventListener("click", () => {
     const at = new Date().toISOString();
@@ -1125,10 +1160,13 @@
       title: "Double peak and corrected flux units",
       items: [
         "Fixed: flux and n<sub>i</sub> were about 6×10<sup>18</sup> times too small because the collector current was not divided by the elementary charge, and τ<sub>i</sub>/τ<sub>rf</sub> was about 2.5×10<sup>9</sup> times too large. Flux is now in m⁻² s⁻¹ and τ<sub>i</sub>/τ<sub>rf</sub> gives the real sheath regime. Results from earlier versions differ.",
-        "Double peak from sheath oscillation: the two highest-energy peaks that stand clearly above the noise give E<sub>low</sub>, E<sub>high</sub> and ΔE, marked on the plot.",
+        "Double peak from sheath oscillation: the two highest-energy peaks that stand clearly above the noise give E<sub>low</sub>, E<sub>high</sub> and ΔE, marked on the plot. When the high-energy peak is only a plateau ending in a sharp edge, the edge is used.",
         "Sheath model: ΔE predicted from V<sub>p</sub>, f<sub>rf</sub>, M<sub>i</sub> and the Child-law sheath width, the sheath width worked out from the measured ΔE, and the ion mean free path.",
         "New notes and flags: splitting too small to resolve, collisional sheath (low-energy peaks likely charge exchange), measured ΔE far from theory, double peak expected but not found.",
         "Batch table and summary CSV have the double-peak and sheath columns.",
+        "Measurements on a biased or powered electrode: the sheath voltage is V<sub>p</sub> minus the electrode voltage from the file (also for τ<sub>i</sub>/τ<sub>rf</sub>).",
+        "Remove files from a batch: ✕ on a row, Remove in the review bar, or Remove rejected. Their saved review stays in this browser.",
+        "The noise estimate ignores the slope of the I–V curve, so steep curves are no longer rated as noisier than they are. Files with 2 traces are no longer flagged.",
       ],
     },
     {
